@@ -89,7 +89,7 @@ const wished = () => BOOKS.filter((b) => b.status === "wishlist");
 
 const FORMATS = { "paperback": "Paperback", "large-paperback": "Large paperback", "mass-market": "Mass-market paperback",
   "hardback": "Hardback", "ebook": "eBook", "audiobook": "Audiobook" };
-const SHELVABLE = new Set(["paperback", "large-paperback", "mass-market", "hardback"]);
+const SHELVABLE = { has: (f) => f !== "ebook" && f !== "audiobook" };     // anything you can put on a shelf
 const READ = { unread: "Not read yet", reading: "Reading", read: "Read" };
 const PRIORITY = { 1: "Really want", 2: "Would like", 3: "Some day" };
 const WOODS = { oak: "Oak", walnut: "Walnut", pine: "Pine", white: "White", black: "Black", grey: "Grey" };
@@ -108,7 +108,7 @@ const seriesText = (b) => b.series ? `${b.series}${b.series_no != null ? " #" + 
 const fmtNo = (n) => Number.isInteger(+n) ? String(+n) : String(+n);
 function placeText(b) {
   if (b.status === "wishlist") return "On the wishlist";
-  if (!SHELVABLE.has(b.format)) return FORMATS[b.format];
+  if (!SHELVABLE.has(b.format)) return `${FORMATS[b.format]} (not on a shelf)`;
   const c = b.bookcase_id != null && caseById(b.bookcase_id);
   return c ? `${c.name} · shelf ${b.shelf + 1}` : "To shelve";
 }
@@ -207,6 +207,7 @@ VIEWS.bookcases = function (p) {
   const mine = owned();
   const tray = mine.filter((b) => b.bookcase_id == null && SHELVABLE.has(b.format)).sort(SORTS.added);
   const shelved = mine.filter((b) => b.bookcase_id != null);
+  const digital = mine.filter((b) => !SHELVABLE.has(b.format)).length;
   const zoom = store.get("zoom", 1);
   const avail = Math.min(view.clientWidth || 360, 1320) - 48;
   // Two bookcases side by side on anything wider than a phone. Every bookcase is drawn at
@@ -241,7 +242,8 @@ VIEWS.bookcases = function (p) {
   parts.push(h("section", { class: "tray" },
     h("div", { class: "tray-head" },
       h("div", {}, h("h2", {}, "To shelve"),
-        h("p", { class: "muted" }, tray.length ? "Drag these onto a shelf, or let the app shelve them for you." : "Nothing waiting. New books land here until they're put on a shelf.")),
+        h("p", { class: "muted" }, tray.length ? "Drag these onto a shelf, or let the app shelve them for you." : "Nothing waiting. New books land here until they're put on a shelf."),
+        digital ? h("p", { class: "muted small" }, `${plural(digital, "eBook or audiobook", "eBooks and audiobooks")} not shown, as they don't go on shelves. Change a book's format if it's really a printed copy.`) : null),
       tray.length && CASES.length ? h("button", { class: "btn", type: "button", onclick: () => arrangeDialog(null) }, "Shelve them for me…") : null),
     trayBox));
   setView(...parts);

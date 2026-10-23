@@ -585,9 +585,21 @@ def job_status():
 
 
 # ---------------------------------------------------------------- books
+def repair(c):
+    """Keep every book findable: a book pointing at a bookcase or shelf that no longer exists
+    goes back to 'To shelve', and anything with an unknown format counts as a paperback."""
+    c.execute("""UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id IS NOT NULL AND (
+                   status != 'owned' OR shelf IS NULL OR shelf < 0 OR
+                   NOT EXISTS (SELECT 1 FROM bookcases k WHERE k.id = books.bookcase_id AND books.shelf < k.shelves))""")
+    c.execute(f"UPDATE books SET format='paperback' WHERE format IS NULL OR format NOT IN ({','.join('?' * len(FORMATS))})",
+              tuple(FORMATS))
+    c.execute("UPDATE books SET status='owned' WHERE status NOT IN ('owned', 'wishlist')")
+
+
 @app.get("/api/books")
 def all_books():
     with db() as c:
+        repair(c)
         return [book_out(r) for r in c.execute("SELECT * FROM books ORDER BY id")]
 
 
@@ -931,7 +943,7 @@ def fill_bookcase(case_id: int, body: dict):
             c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id=?", (case_id,))
         else:
             books = c.execute(f"SELECT * FROM books WHERE status='owned' AND bookcase_id IS NULL AND "
-                              f"format IN ({','.join('?' * len(SHELVABLE))})", SHELVABLE).fetchall()
+                              "format NOT IN ('ebook', 'audiobook')").fetchall()
             for r in c.execute("SELECT * FROM books WHERE bookcase_id=?", (case_id,)):
                 if r["shelf"] is not None and r["shelf"] < case["shelves"]:
                     used[r["shelf"]] += dims(r)[1]
