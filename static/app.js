@@ -218,7 +218,7 @@ VIEWS.bookcases = function (p) {
   const mine = owned();
   const tray = mine.filter((b) => b.bookcase_id == null && SHELVABLE.has(b.format)).sort(SORTS.added);
   const shelved = mine.filter((b) => b.bookcase_id != null);
-  const digital = mine.filter((b) => !SHELVABLE.has(b.format)).length;
+  const digital = mine.filter((b) => !SHELVABLE.has(b.format)).length;   // not drawn on shelves
   const zoom = store.get("zoom", 1);
   const avail = Math.min(view.clientWidth || 360, 1320) - 48;
   // Two bookcases side by side on anything wider than a phone. Every bookcase is drawn at
@@ -234,7 +234,8 @@ VIEWS.bookcases = function (p) {
     onclick: () => { store.set("zoom", Math.max(.5, Math.min(2.5, +(zoom * d).toFixed(2)))); rerender(); } }, d > 1 ? "+" : "−");
 
   const parts = [pageHead("Our bookcases",
-    [stat(shelved.length, "on the shelves"), stat(tray.length, "to shelve"), stat(CASES.length, CASES.length === 1 ? "bookcase" : "bookcases")],
+    [stat(shelved.length, "on the shelves"), stat(tray.length, "to shelve"), digital ? stat(digital, "eBooks & audio") : null,
+      stat(CASES.length, CASES.length === 1 ? "bookcase" : "bookcases")],
     h("button", { class: "btn primary", type: "button", onclick: () => editCase() }, "+ Bookcase"))];
   if (!CASES.length) {
     parts.push(empty("Build your first bookcase",
@@ -254,7 +255,9 @@ VIEWS.bookcases = function (p) {
     h("div", { class: "tray-head" },
       h("div", {}, h("h2", {}, "To shelve"),
         h("p", { class: "muted" }, tray.length ? "Drag these onto a shelf, or let the app shelve them for you." : "Nothing waiting. New books land here until they're put on a shelf."),
-        digital ? h("p", { class: "muted small" }, `${plural(digital, "eBook or audiobook", "eBooks and audiobooks")} not shown, as they don't go on shelves. Change a book's format if it's really a printed copy.`) : null),
+        digital ? h("p", { class: "muted small" }, "Not on the shelves because they're set as eBooks or audiobooks (tap one to change its format): ",
+          mine.filter((b) => !SHELVABLE.has(b.format)).map((b, i) => [i ? ", " : "",
+            h("button", { class: "linkish", type: "button", onclick: () => openBook(b.id) }, `${b.title} (${FORMATS[b.format]})`)])) : null),
       tray.length && CASES.length ? h("button", { class: "btn", type: "button", onclick: () => arrangeDialog(null) }, "Shelve them for me…") : null),
     trayBox));
   setView(...parts);

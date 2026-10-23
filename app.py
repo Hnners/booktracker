@@ -451,7 +451,9 @@ def edition_choices(r):
             "url": f"{OL_COVERS}/b/id/{covers[0]}-L.jpg", "preview": f"{OL_COVERS}/b/id/{covers[0]}-M.jpg",
             "label": " · ".join(x for x in (publisher, year, places.split(",")[0] if places else None) if x) or "Another edition",
             "uk": uk, "edition": {"isbn": isbn, "title": e.get("title"), "subtitle": e.get("subtitle"), "publisher": publisher,
-                                  "year": year, "pages": e.get("number_of_pages"), "format": guess_format(e.get("physical_format"))}}))
+                                  "year": year, "pages": e.get("number_of_pages"),
+                                  # never turn a book you hold into an eBook just by borrowing a cover
+                                  "format": f if (f := guess_format(e.get("physical_format"))) in SHELVABLE else None}}))
     for *_, o in sorted(others, key=lambda x: x[:3]):
         if o["url"] not in seen and len(out) < 40:
             seen.add(o["url"])
