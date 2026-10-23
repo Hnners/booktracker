@@ -1,6 +1,6 @@
 {
-  "name": "Book Tracker",
-  "short_name": "Books",
+  "name": "Gabbie's Library",
+  "short_name": "Gabbie's Library",
   "description": "Our books, bookcases, series and wishlist",
   "id": "/",
   "start_url": "/#bookcases",

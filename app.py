@@ -54,7 +54,7 @@ FORMATS = {
 DIGITAL = ("ebook", "audiobook")
 SHELVABLE = ("paperback", "large-paperback", "mass-market", "hardback")
 
-app = FastAPI(title="Book Tracker")
+app = FastAPI(title="Gabbie's Library")
 
 
 # ---------------------------------------------------------------- database
@@ -1074,7 +1074,7 @@ async def import_csv(file: UploadFile = File(...), to_read: str = Form("wishlist
         raise HTTPException(400, "That file has no rows")
     goodreads = "Exclusive Shelf" in rows[0]
     if not goodreads and "title" not in rows[0]:
-        raise HTTPException(400, "That doesn't look like a Goodreads export or a Book Tracker CSV")
+        raise HTTPException(400, "That doesn't look like a Goodreads export or a CSV exported from this app")
     added, skipped, new_ids = 0, 0, []
     with db() as c:
         cases = {r["name"].lower(): r["id"] for r in c.execute("SELECT id, name FROM bookcases")}
