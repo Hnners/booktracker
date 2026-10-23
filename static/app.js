@@ -209,7 +209,13 @@ VIEWS.bookcases = function (p) {
   const shelved = mine.filter((b) => b.bookcase_id != null);
   const zoom = store.get("zoom", 1);
   const avail = Math.min(view.clientWidth || 360, 1320) - 48;
-  const scaleFor = (c) => Math.max(.45, Math.min(1.05, (avail - 28) / (c.width_cm * 10))) * zoom;
+  // Two bookcases side by side on anything wider than a phone. Every bookcase is drawn at
+  // the same scale, so a narrower one really looks narrower.
+  const twoCols = window.innerWidth >= 720 && CASES.length > 1;
+  const colW = twoCols ? (avail - 32) / 2 : avail;
+  const widest = Math.max(600, ...CASES.map((c) => c.width_cm * 10));
+  const fit = Math.max(.3, Math.min(1.05, (colW - 28) / widest));
+  const scaleFor = () => fit * zoom;
   const find = h("input", { type: "search", placeholder: "Where's that book? Type a title or author", "aria-label": "Find a book on the shelves",
     oninput: () => highlight(find.value) });
   const zoomBtn = (d, label) => h("button", { class: "btn", type: "button", "aria-label": label, title: label,
@@ -225,7 +231,7 @@ VIEWS.bookcases = function (p) {
       h("a", { class: "btn", href: "#add" }, "Add books first")));
   } else {
     parts.push(h("div", { class: "controls" }, find, h("div", { class: "row zoom" }, zoomBtn(1 / 1.25, "Zoom out"), zoomBtn(1.25, "Zoom in"))));
-    const wall = h("div", { class: "wall" }, CASES.map((c) => caseEl(c, scaleFor(c), mine)));
+    const wall = h("div", { class: "wall" + (twoCols ? " two" : "") }, CASES.map((c) => caseEl(c, scaleFor(c), mine)));
     wall.addEventListener("click", spineClick);
     parts.push(wall);
   }

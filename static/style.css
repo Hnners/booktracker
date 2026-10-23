@@ -148,6 +148,8 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6
 .zoom .btn { width: 44px; font-size: 1.3rem; padding: 0; }
 .wall { display: flex; flex-wrap: wrap; gap: 36px 40px; align-items: flex-start; padding: 8px 0 12px; overflow-x: auto; }
 .case { flex: none; max-width: 100%; }
+.wall.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px 32px; overflow: visible; }
+.wall.two .case { overflow-x: auto; padding-bottom: 14px; width: fit-content; max-width: 100%; }
 .case-head { display: flex; justify-content: space-between; align-items: end; gap: 10px; margin-bottom: 8px; }
 .case-head h2 { font-size: 1.15rem; }
 .case-head .muted { font-size: .85rem; }
