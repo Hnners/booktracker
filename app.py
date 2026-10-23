@@ -79,6 +79,10 @@ def setup():
             bookcase_id INTEGER, shelf INTEGER, shelf_pos REAL,
             wish_priority INTEGER DEFAULT 2, wish_note TEXT,
             added_at TEXT, updated_at TEXT)""")
+        cols = [r[1] for r in c.execute("PRAGMA table_info(books)")]
+        for col in ("loaned_to", "loaned_at"):          # on loan: who to (optional) and since when
+            if col not in cols:
+                c.execute(f"ALTER TABLE books ADD COLUMN {col} TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS books_isbn ON books(isbn)")
         c.execute("CREATE INDEX IF NOT EXISTS books_place ON books(bookcase_id, shelf, shelf_pos)")
         c.execute("""CREATE TABLE IF NOT EXISTS bookcases (
@@ -642,7 +646,7 @@ def search(q: str):
 
 EDITABLE = ("status", "title", "subtitle", "authors", "isbn", "publisher", "year", "pages", "format",
             "height_mm", "thickness_mm", "series", "series_no", "description", "read_status", "rating",
-            "notes", "wish_priority", "wish_note")
+            "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at")
 
 
 def clean(field, value):
@@ -650,6 +654,10 @@ def clean(field, value):
         return None
     if field == "authors":
         return json.dumps(split_authors(value))
+    if field == "loaned_at":
+        if not re.match(r"^\d{4}-\d{2}-\d{2}", str(value)):
+            raise HTTPException(400, "The loan date should look like 2026-10-23")
+        return str(value)[:10]
     if field == "isbn":
         return isbn13(value) or re.sub(r"[^0-9Xx]", "", str(value)) or None
     if field in ("pages", "rating", "wish_priority"):
@@ -714,7 +722,7 @@ def edit_book(book_id: int, body: dict):
         get_book(c, book_id)
         fields = {k: clean(k, v) for k, v in body.items() if k in EDITABLE}
         if fields.get("status") == "wishlist":
-            fields.update(bookcase_id=None, shelf=None, shelf_pos=None)
+            fields.update(bookcase_id=None, shelf=None, shelf_pos=None, loaned_to=None, loaned_at=None)
         if fields:
             fields["updated_at"] = now()
             c.execute(f"UPDATE books SET {', '.join(k + '=?' for k in fields)} WHERE id=?", (*fields.values(), book_id))
@@ -998,7 +1006,7 @@ def rename_series(body: dict):
 
 # ---------------------------------------------------------------- import / export / backup
 EXPORT_COLS = ["title", "subtitle", "authors", "isbn", "series", "series_no", "format", "pages", "year", "publisher",
-               "status", "read_status", "rating", "bookcase", "shelf", "notes", "wish_priority", "wish_note", "added_at"]
+               "status", "read_status", "rating", "bookcase", "shelf", "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at", "added_at"]
 
 
 @app.get("/api/export.csv")

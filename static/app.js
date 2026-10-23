@@ -141,8 +141,8 @@ function spineEl(b, scale) {
   const bg = spineBg(b), ink = inkFor(bg);
   const acc = b.spine_accent && Math.abs(lum(b.spine_accent) - lum(bg)) > .08 ? b.spine_accent : ink;
   const el = h("button", {
-    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}`,
-    type: "button", "data-id": b.id, title: `${b.title} — ${authorsText(b)}`,
+    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}`,
+    type: "button", "data-id": b.id, title: `${b.title} — ${authorsText(b)}${b.loaned_at ? ` (on loan${b.loaned_to ? " to " + b.loaned_to : ""})` : ""}`,
     style: `width:${w.toFixed(1)}px;height:${ht.toFixed(1)}px;--bg:${bg};--ink:${ink};--acc:${acc};--acc-ink:${inkFor(acc)}`,
   });
   if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false" }));
@@ -169,6 +169,7 @@ function bookTile(b, extra) {
     coverEl(b),
     b.status === "wishlist" ? h("span", { class: "ribbon" }, "Wishlist") : null,
     b.read_status === "read" ? h("span", { class: "read-mark", title: "Read" }, "✓") : null,
+    b.loaned_at && b.status === "owned" ? h("span", { class: "ribbon loan" }, b.loaned_to ? `Lent to ${b.loaned_to}` : "On loan") : null,
     h("span", { class: "tile-title" }, b.title),
     h("span", { class: "tile-sub" }, extra !== undefined ? extra : authorsText(b)));
 }
@@ -397,7 +398,7 @@ VIEWS.library = function () {
   const read = mine.filter((b) => b.read_status === "read").length;
   const q = h("input", { type: "search", value: st.q, placeholder: "Search title, author, series, ISBN", "aria-label": "Search the library" });
   const show = h("select", { "aria-label": "Show" }, Object.entries({ all: "All our books", unread: "Not read yet", reading: "Reading now",
-    read: "Read", unshelved: "To shelve", nocover: "Missing a cover" }).map(([v, l]) => h("option", { value: v }, l)));
+    read: "Read", unshelved: "To shelve", loaned: "On loan", nocover: "Missing a cover" }).map(([v, l]) => h("option", { value: v }, l)));
   const sort = h("select", { "aria-label": "Sort" }, Object.entries({ author: "Author", title: "Title", added: "Recently added", series: "Series" })
     .map(([v, l]) => h("option", { value: v }, l)));
   show.value = st.show; sort.value = st.sort;
@@ -407,7 +408,7 @@ VIEWS.library = function () {
     store.set("lib", { q: q.value, show: show.value, sort: sort.value });
     const tests = { all: () => true, unread: (b) => b.read_status === "unread", reading: (b) => b.read_status === "reading",
       read: (b) => b.read_status === "read", unshelved: (b) => SHELVABLE.has(b.format) && b.bookcase_id == null,
-      nocover: (b) => !b.cover_url };
+      loaned: (b) => !!b.loaned_at, nocover: (b) => !b.cover_url };
     const list = mine.filter((b) => tests[show.value](b) && matches(b, q.value.trim())).sort(SORTS[sort.value]);
     grid.replaceChildren(...list.map((b) => bookTile(b, sort.value === "series" && b.series ? seriesText(b) : authorsText(b))));
     count.textContent = list.length === mine.length ? "" : `Showing ${list.length} of ${mine.length}`;
@@ -563,6 +564,33 @@ function editSeries(s) {
 }
 
 // ---------------------------------------------------------------- Wishlist
+VIEWS.loans = function () {
+  const out = owned().filter((b) => b.loaned_at).sort((a, b) => a.loaned_at.localeCompare(b.loaned_at));
+  const ago = (d) => {
+    const days = Math.round((Date.now() - new Date(d + "T12:00")) / 864e5);
+    return days <= 0 ? "today" : days === 1 ? "yesterday" : days < 60 ? `${days} days ago` : `${Math.round(days / 30)} months ago`;
+  };
+  const back = async (b, btn) => {
+    btn.disabled = true;
+    try { upsert(await api(`/books/${b.id}`, { method: "PATCH", body: { loaned_at: "", loaned_to: "" } })); toast(`${b.title} is back`); rerender(); }
+    catch (e) { fail(e); btn.disabled = false; }
+  };
+  const people = [...new Set(out.map((b) => b.loaned_to || ""))].sort((a, b) => (a === "") - (b === "") || a.localeCompare(b));
+  setView(
+    pageHead("On loan", [stat(out.length, out.length === 1 ? "book out" : "books out"), stat(people.filter(Boolean).length, "people")]),
+    out.length ? people.map((p) => h("section", { class: "loan-group" },
+      h("h2", {}, p || "Not noted who"),
+      h("div", { class: "loan-list" }, out.filter((b) => (b.loaned_to || "") === p).map((b) => h("div", { class: "loan-row" },
+        h("button", { class: "thumb-btn", type: "button", onclick: () => openBook(b.id), "aria-label": `Open ${b.title}` }, coverEl(b, "thumb")),
+        h("div", { class: "loan-body" },
+          h("button", { class: "linkish title-link", type: "button", onclick: () => openBook(b.id) }, b.title),
+          h("div", { class: "muted small" }, authorsText(b)),
+          h("div", { class: "small" }, `Lent ${ago(b.loaned_at)} (${new Date(b.loaned_at + "T12:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}) · from ${placeText(b)}`)),
+        h("button", { class: "btn small got", type: "button", onclick: (e) => back(b, e.currentTarget) }, "It's back")))))) :
+      empty("Nothing out on loan", "Lending a book? Open it and switch on 'On loan'. It stays on its shelf, faded, so you can see the gap, and shows up here."))
+  ;
+};
+
 VIEWS.wishlist = function () {
   const list = wished();
   const sections = [1, 2, 3].map((p) => {
@@ -836,10 +864,20 @@ function openBook(id, seed) {
   const startPlace = placeSel.value;
   const datalist = h("datalist", { id: "series-names" }, [...new Set(BOOKS.map((x) => x.series).filter(Boolean))].sort().map((s) => h("option", { value: s })));
 
+  const today = () => new Date().toLocaleDateString("en-CA");      // 2026-10-23
+  const loanOn = h("input", { type: "checkbox", checked: !!b.loaned_at, role: "switch" });
+  const loanTo = h("input", { value: b.loaned_to || "", placeholder: "Who has it? (optional)", list: "lent-to-names" });
+  const loanAt = h("input", { type: "date", value: b.loaned_at || today(), max: today() });
+  const loanNames = h("datalist", { id: "lent-to-names" }, [...new Set(BOOKS.map((x) => x.loaned_to).filter(Boolean))].sort().map((n) => h("option", { value: n })));
+  const loanDetail = h("div", { class: "grid-2 loan-detail" }, h("label", { class: "field" }, "Lent to", loanTo), h("label", { class: "field" }, "Since", loanAt));
+  const syncLoan = () => { loanDetail.hidden = !loanOn.checked; if (loanOn.checked) setTimeout(() => loanTo.focus(), 0); };
+  loanOn.addEventListener("change", syncLoan);
+  loanDetail.hidden = !loanOn.checked;
   const gather = () => {
     const body = { read_status: readStatus, rating: rating || null };
     for (const [k, el] of Object.entries(f)) body[k] = el.value.trim ? el.value.trim() : el.value;
     if (b.status !== "wishlist") { delete body.wish_priority; delete body.wish_note; }
+    if (b.status === "owned") { body.loaned_at = loanOn.checked ? (loanAt.value || today()) : ""; body.loaned_to = loanOn.checked ? loanTo.value.trim() : ""; }
     return body;
   };
   const save = async (e) => {
@@ -914,6 +952,9 @@ function openBook(id, seed) {
         b.status === "owned" ? h("div", { class: "grid-2" }, field("Where it lives", placeSel), field("Format", f.format)) :
           h("div", { class: "grid-2" }, field("How much we want it", f.wish_priority), field("Format", f.format)),
         b.status === "wishlist" ? field("Wishlist note", f.wish_note) : null,
+        b.status === "owned" ? h("div", { class: "loan-box" + (b.loaned_at ? " on" : "") },
+          h("label", { class: "check toggle" }, loanOn, h("span", {}, h("strong", {}, "On loan"), h("span", { class: "muted small" }, " · still shown on its shelf, faded"))),
+          loanDetail, loanNames) : null,
         h("div", { class: "field" }, h("span", {}, "Read?"), readSeg),
         h("div", { class: "field" }, h("span", {}, "Rating"), starBox),
         field("Notes", f.notes),
