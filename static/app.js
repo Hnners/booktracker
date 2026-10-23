@@ -136,21 +136,24 @@ function lum(hex) {
 const inkFor = (bg) => lum(bg) > .32 ? "#1d1a17" : "#f7f2e8";
 const spineBg = (b) => b.spine_colour || CLOTH[hashCode(b.title) % CLOTH.length];
 
-function spineEl(b, scale) {
-  const w = Math.max(5, b.thickness * scale), ht = b.height * scale;
+function spineEl(b, scale, flat = false) {
+  // Upright: as wide as the book is thick. Lying flat: as wide as the book is tall.
+  const w = flat ? b.height * scale : Math.max(5, b.thickness * scale);
+  const ht = flat ? Math.max(5, b.thickness * scale) : b.height * scale;
   const bg = spineBg(b), ink = inkFor(bg);
   const acc = b.spine_accent && Math.abs(lum(b.spine_accent) - lum(bg)) > .08 ? b.spine_accent : ink;
   const el = h("button", {
-    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}`,
+    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}${flat ? " flat" : ""}`,
     type: "button", "data-id": b.id, title: `${b.title} — ${authorsText(b)}${b.loaned_at ? ` (on loan${b.loaned_to ? " to " + b.loaned_to : ""})` : ""}`,
     style: `width:${w.toFixed(1)}px;height:${ht.toFixed(1)}px;--bg:${bg};--ink:${ink};--acc:${acc};--acc-ink:${inkFor(acc)}`,
   });
-  if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false" }));
-  else if (w >= 10) {
-    const fs = Math.max(6.5, Math.min(14, w * .42, ht / 16));
+  if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false",
+    style: flat ? `position:absolute;width:${ht.toFixed(1)}px;height:${w.toFixed(1)}px;left:${((w - ht) / 2).toFixed(1)}px;top:${((ht - w) / 2).toFixed(1)}px;transform:rotate(-90deg)` : null }));
+  else if (flat ? ht >= 10 : w >= 10) {
+    const fs = flat ? Math.max(6.5, Math.min(14, ht * .42, w / 16)) : Math.max(6.5, Math.min(14, w * .42, ht / 16));
     el.append(h("span", { class: "spine-text", style: `font-size:${fs.toFixed(1)}px` },
       h("span", { class: "spine-title" }, b.title),
-      b.authors[0] && ht > 90 ? h("span", { class: "spine-author" }, nameParts(b.authors[0]).last) : null));
+      b.authors[0] && (flat ? w : ht) > 90 ? h("span", { class: "spine-author" }, nameParts(b.authors[0]).last) : null));
   }
   el.setAttribute("aria-label", `${b.title} by ${authorsText(b)}`);
   return el;
@@ -259,8 +262,12 @@ VIEWS.bookcases = function (p) {
   setView(...parts);
 
   // dragging between shelves (hold for a moment on a phone)
-  for (const el of view.querySelectorAll(".shelf-books, .tray-books")) {
+  // Stacks are lists of their own: drag a book in to lay it flat, out to stand it up.
+  // A stack's grip (the tab on top) moves the whole stack.
+  for (const el of view.querySelectorAll(".shelf-books, .tray-books, .stack")) {
+    const isStack = el.classList.contains("stack");
     sortables.push(new Sortable(el, { group: "books", animation: 150, delay: 220, delayOnTouchOnly: true,
+      draggable: isStack ? ".spine" : ".spine, .stack", filter: isStack ? ".stack-grip" : null, preventOnFilter: false,
       ghostClass: "spine-ghost", chosenClass: "spine-chosen",
       onEnd: (e) => { if (e.from !== e.to || e.oldIndex !== e.newIndex) saveOrder(e.from, e.to); } }));
   }
@@ -285,15 +292,28 @@ function highlight(q) {
   }
   if (first) first.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
 }
+// A shelf's books in order, with each run of books lying flat grouped into a stack (bottom first)
+function shelfItems(books) {
+  const items = [];
+  for (const b of books) {
+    if (b.flat) { const last = items[items.length - 1]; if (Array.isArray(last)) last.push(b); else items.push([b]); }
+    else items.push(b);
+  }
+  return items;
+}
 function caseEl(c, scale, mine) {
   const onCase = mine.filter((b) => b.bookcase_id === c.id);
   const shelves = [];
   for (let s = 0; s < c.shelves; s++) {
     const books = onCase.filter((b) => b.shelf === s).sort((a, b) => (a.shelf_pos || 0) - (b.shelf_pos || 0));
-    const used = books.reduce((t, b) => t + b.thickness, 0);
+    const items = shelfItems(books);
+    const used = items.reduce((t, it) => t + (Array.isArray(it) ? Math.max(...it.map((b) => b.height)) : it.thickness), 0);
     const over = used > c.width_cm * 10;
     shelves.push(h("div", { class: "shelf" + (over ? " over" : ""), style: `height:${(c.shelf_height_cm * 10 * scale).toFixed(0)}px` },
-      h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, books.map((b) => spineEl(b, scale)))),
+      h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, items.map((it) => Array.isArray(it)
+        ? h("div", { class: "stack" }, it.map((b) => spineEl(b, scale, true)),
+            h("span", { class: "stack-grip", title: "Drag here to move the whole stack", "aria-hidden": "true" }))
+        : spineEl(it, scale)))),
       h("div", { class: "plank" }, h("span", { class: "fill", title: "Used shelf space" },
         over ? `Over by ${((used - c.width_cm * 10) / 10).toFixed(0)} cm` : `${Math.round(used / 10)} of ${c.width_cm} cm`)));
   }
@@ -306,12 +326,18 @@ function caseEl(c, scale, mine) {
     h("div", { class: "case-frame", style: `width:${(c.width_cm * 10 * scale + 28).toFixed(0)}px` }, shelves));
 }
 async function saveOrder(from, to) {
-  const lists = [...new Set([from, to])].map((el) => {
-    const ids = [...el.querySelectorAll(".spine")].map((s) => +s.dataset.id);
+  const roots = [...new Set([from, to].map((el) => el.closest(".shelf-books, .tray-books")))];
+  const lists = roots.map((el) => {
+    const ids = [], flat = [];
+    for (const kid of el.children) {
+      if (kid.classList.contains("spine")) ids.push(+kid.dataset.id);
+      else if (kid.classList.contains("stack")) for (const sp of kid.querySelectorAll(".spine")) { ids.push(+sp.dataset.id); flat.push(+sp.dataset.id); }
+    }
     const caseId = el.dataset.case === "" ? null : +el.dataset.case;
     const shelf = caseId == null ? null : +el.dataset.shelf;
-    ids.forEach((id, i) => Object.assign(bookById(id), { bookcase_id: caseId, shelf, shelf_pos: caseId == null ? null : i + 1 }));
-    return { bookcase_id: caseId, shelf, ids };
+    ids.forEach((id, i) => Object.assign(bookById(id), { bookcase_id: caseId, shelf, shelf_pos: caseId == null ? null : i + 1,
+      flat: caseId != null && flat.includes(id) ? 1 : 0 }));
+    return { bookcase_id: caseId, shelf, ids, flat: caseId == null ? [] : flat };
   });
   try {
     await api("/arrange", { method: "POST", body: { lists } });
@@ -387,7 +413,7 @@ function arrangeDialog(c) {
     h("label", { class: "field" }, "Bookcase", target),
     h("label", { class: "field" }, "What to arrange", source),
     h("label", { class: "field" }, "Order", order),
-    h("p", { class: "muted small" }, "Books fill each shelf from the top until it's full, using each book's thickness. You can drag any of them afterwards."),
+    h("p", { class: "muted small" }, "Books fill each shelf from the top until it's full, using each book's thickness. Re-sorting stands any stacked books upright. You can drag any of them afterwards."),
     h("div", { class: "row end" }, h("button", { class: "btn primary", type: "submit" }, "Arrange"))));
 }
 
@@ -873,10 +899,18 @@ function openBook(id, seed) {
   const syncLoan = () => { loanDetail.hidden = !loanOn.checked; if (loanOn.checked) setTimeout(() => loanTo.focus(), 0); };
   loanOn.addEventListener("change", syncLoan);
   loanDetail.hidden = !loanOn.checked;
+  const flatOn = h("input", { type: "checkbox", checked: !!b.flat, role: "switch" });
+  const flatBox = h("div", { class: "loan-box" },
+    h("label", { class: "check toggle" }, flatOn, h("span", {}, h("strong", {}, "Lying flat"),
+      h("span", { class: "muted small" }, " · on its side in a stack; books lying flat next to each other stack up"))));
+  const syncFlat = () => { flatBox.hidden = !placeSel.value; };
+  placeSel.addEventListener("change", syncFlat);
+  syncFlat();
   const gather = () => {
     const body = { read_status: readStatus, rating: rating || null };
     for (const [k, el] of Object.entries(f)) body[k] = el.value.trim ? el.value.trim() : el.value;
     if (b.status !== "wishlist") { delete body.wish_priority; delete body.wish_note; }
+    if (b.status === "owned") body.flat = placeSel.value && flatOn.checked ? 1 : 0;
     if (b.status === "owned") { body.loaned_at = loanOn.checked ? (loanAt.value || today()) : ""; body.loaned_to = loanOn.checked ? loanTo.value.trim() : ""; }
     return body;
   };
@@ -952,6 +986,7 @@ function openBook(id, seed) {
         b.status === "owned" ? h("div", { class: "grid-2" }, field("Where it lives", placeSel), field("Format", f.format)) :
           h("div", { class: "grid-2" }, field("How much we want it", f.wish_priority), field("Format", f.format)),
         b.status === "wishlist" ? field("Wishlist note", f.wish_note) : null,
+        b.status === "owned" ? flatBox : null,
         b.status === "owned" ? h("div", { class: "loan-box" + (b.loaned_at ? " on" : "") },
           h("label", { class: "check toggle" }, loanOn, h("span", {}, h("strong", {}, "On loan"), h("span", { class: "muted small" }, " · still shown on its shelf, faded"))),
           loanDetail, loanNames) : null,

@@ -80,9 +80,10 @@ def setup():
             wish_priority INTEGER DEFAULT 2, wish_note TEXT,
             added_at TEXT, updated_at TEXT)""")
         cols = [r[1] for r in c.execute("PRAGMA table_info(books)")]
-        for col in ("loaned_to", "loaned_at"):          # on loan: who to (optional) and since when
+        for col, kind in (("loaned_to", "TEXT"), ("loaned_at", "TEXT"),   # on loan: who to (optional), since when
+                          ("flat", "INTEGER NOT NULL DEFAULT 0")):        # lying on its side; neighbours stack up
             if col not in cols:
-                c.execute(f"ALTER TABLE books ADD COLUMN {col} TEXT")
+                c.execute(f"ALTER TABLE books ADD COLUMN {col} {kind}")
         c.execute("CREATE INDEX IF NOT EXISTS books_isbn ON books(isbn)")
         c.execute("CREATE INDEX IF NOT EXISTS books_place ON books(bookcase_id, shelf, shelf_pos)")
         c.execute("""CREATE TABLE IF NOT EXISTS bookcases (
@@ -599,6 +600,7 @@ def repair(c):
     c.execute(f"UPDATE books SET format='paperback' WHERE format IS NULL OR format NOT IN ({','.join('?' * len(FORMATS))})",
               tuple(FORMATS))
     c.execute("UPDATE books SET status='owned' WHERE status NOT IN ('owned', 'wishlist')")
+    c.execute("UPDATE books SET flat=0 WHERE flat != 0 AND bookcase_id IS NULL")
 
 
 @app.get("/api/books")
@@ -646,10 +648,12 @@ def search(q: str):
 
 EDITABLE = ("status", "title", "subtitle", "authors", "isbn", "publisher", "year", "pages", "format",
             "height_mm", "thickness_mm", "series", "series_no", "description", "read_status", "rating",
-            "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at")
+            "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at", "flat")
 
 
 def clean(field, value):
+    if field == "flat" and value in ("", None, False, 0):
+        return 0
     if value in ("", None):
         return None
     if field == "authors":
@@ -660,6 +664,8 @@ def clean(field, value):
         return str(value)[:10]
     if field == "isbn":
         return isbn13(value) or re.sub(r"[^0-9Xx]", "", str(value)) or None
+    if field == "flat":
+        return 1 if str(value).lower() in ("1", "true", "yes") else 0
     if field in ("pages", "rating", "wish_priority"):
         return int(float(value))
     if field in ("height_mm", "thickness_mm", "series_no"):
@@ -732,7 +738,7 @@ def edit_book(book_id: int, body: dict):
                 c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=? WHERE id=?",
                           (int(p["bookcase_id"]), int(p["shelf"]), end_of_shelf(c, p["bookcase_id"], p["shelf"]), book_id))
             else:
-                c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE id=?", (book_id,))
+                c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE id=?", (book_id,))
         return book_out(get_book(c, book_id))
 
 
@@ -907,12 +913,13 @@ def arrange(body: dict):
     with db() as c:
         for lst in body.get("lists") or []:
             case_id, shelf = lst.get("bookcase_id"), lst.get("shelf")
+            flat = {int(x) for x in lst.get("flat") or []}
             for i, book_id in enumerate(lst.get("ids") or []):
                 if case_id is None:
-                    c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE id=?", (book_id,))
+                    c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE id=?", (book_id,))
                 else:
-                    c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, status='owned' WHERE id=?",
-                              (int(case_id), int(shelf), i + 1, int(book_id)))
+                    c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, flat=?, status='owned' WHERE id=?",
+                              (int(case_id), int(shelf), i + 1, int(int(book_id) in flat), int(book_id)))
     return {"ok": True}
 
 
@@ -922,6 +929,18 @@ def hue_key(b):
     r, g, bl = (int(col[i:i + 2], 16) / 255 for i in (1, 3, 5))
     h, l, s = colorsys.rgb_to_hls(r, g, bl)
     return (0 if s > .18 and .12 < l < .9 else 1, round(h * 12) % 12 if s > .18 else l, l)
+
+
+def shelf_width(rows):
+    """mm of shelf a row of books takes: upright books their thickness, a stack its longest book."""
+    total, stack = 0.0, 0.0
+    for r in rows:
+        if r["flat"]:
+            stack = max(stack, dims(r)[0])
+        else:
+            total += stack + dims(r)[1]
+            stack = 0.0
+    return total + stack
 
 
 ORDERS = {
@@ -949,14 +968,14 @@ def fill_bookcase(case_id: int, body: dict):
         count = [0] * case["shelves"]
         if body.get("source") == "case":
             books = c.execute("SELECT * FROM books WHERE bookcase_id=?", (case_id,)).fetchall()
-            c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id=?", (case_id,))
+            c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE bookcase_id=?", (case_id,))
         else:
             books = c.execute(f"SELECT * FROM books WHERE status='owned' AND bookcase_id IS NULL AND "
                               "1=1").fetchall()
-            for r in c.execute("SELECT * FROM books WHERE bookcase_id=?", (case_id,)):
-                if r["shelf"] is not None and r["shelf"] < case["shelves"]:
-                    used[r["shelf"]] += dims(r)[1]
-                    count[r["shelf"]] = max(count[r["shelf"]], int(r["shelf_pos"] or 0))
+            for s in range(case["shelves"]):
+                rows = c.execute("SELECT * FROM books WHERE bookcase_id=? AND shelf=? ORDER BY shelf_pos", (case_id, s)).fetchall()
+                used[s] = shelf_width(rows)
+                count[s] = max([int(r["shelf_pos"] or 0) for r in rows] or [0])
         placed, shelf = 0, 0
         for b in sorted(books, key=order):
             t = dims(b)[1]
