@@ -1419,6 +1419,16 @@ def service_worker():
     return FileResponse(STATIC / "sw.js", media_type="text/javascript")
 
 
+def version_of(name):
+    """A fingerprint of a file's contents: it changes whenever an update changes the file."""
+    return hashlib.sha1((STATIC / name).read_bytes()).hexdigest()[:10]
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    """The page, pointing at this version of the script and styles (app.js?v=...), so phones,
+    browsers and Cloudflare never keep running an old copy after an update."""
+    html = (STATIC / "index.html").read_text()
+    for name in ("app.js", "style.css"):
+        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={version_of(name)}\"")
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
