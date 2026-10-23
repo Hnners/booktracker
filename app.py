@@ -42,7 +42,8 @@ OL = os.environ.get("OPENLIBRARY_URL", "https://openlibrary.org")
 OL_COVERS = os.environ.get("OPENLIBRARY_COVERS_URL", "https://covers.openlibrary.org")
 GB = os.environ.get("GOOGLE_BOOKS_URL", "https://www.googleapis.com/books/v1")
 GB_KEY = os.environ.get("GOOGLE_BOOKS_KEY", "")          # optional; raises Google's daily limit
-UA = "BookTracker/1.0 (self-hosted home library)"
+UA = "BookTracker/1.0 (self-hosted home library; https://github.com/Hnners/booktracker)"
+WIKIDATA = os.environ.get("WIKIDATA_SPARQL_URL", "https://query.wikidata.org/sparql")
 
 # Sizes for drawing spines when a book doesn't say: spine height by format (mm)
 FORMATS = {
@@ -116,6 +117,13 @@ def setup():
             shelves INTEGER NOT NULL DEFAULT 5, width_cm REAL NOT NULL DEFAULT 80,
             shelf_height_cm REAL NOT NULL DEFAULT 30, wood TEXT DEFAULT 'oak', pos INTEGER DEFAULT 0)""")
         c.execute("CREATE TABLE IF NOT EXISTS series_info (name TEXT PRIMARY KEY COLLATE NOCASE, total INTEGER)")
+        info_cols = [r[1] for r in c.execute("PRAGMA table_info(series_info)")]
+        for col in ("wikidata", "wikidata_name", "checked_at"):
+            if col not in info_cols:
+                c.execute(f"ALTER TABLE series_info ADD COLUMN {col} TEXT")
+        # every book in a series as Wikidata lists it, so the missing ones can be shown by name
+        c.execute("""CREATE TABLE IF NOT EXISTS series_catalog (series TEXT NOT NULL COLLATE NOCASE, no REAL NOT NULL,
+            title TEXT NOT NULL, year TEXT, PRIMARY KEY (series, no))""")
 
 
 setup()
@@ -566,6 +574,124 @@ def fetch_cover(c, book_id, urls):
         except Exception:
             continue
     return False
+
+
+# ---------------------------------------------------------------- whole series, from Wikidata
+def sparql(query):
+    data = http_json(f"{WIKIDATA}?format=json&query={urllib.parse.quote(query)}", timeout=25)
+    return (data or {}).get("results", {}).get("bindings", [])
+
+
+def norm_title(t):
+    t = re.sub(r"[^a-z0-9 ]", "", (t or "").lower().replace("&", "and"))
+    return re.sub(r"^(the|a|an) ", "", re.sub(r"\s+", " ", t)).strip()
+
+
+SERIES_FOR_BOOK = """SELECT DISTINCT ?series ?seriesLabel WHERE {
+  SERVICE wikibase:mwapi { bd:serviceParam wikibase:endpoint "www.wikidata.org"; wikibase:api "EntitySearch";
+    mwapi:search %(title)s; mwapi:language "en". ?work wikibase:apiOutputItem mwapi:item. }
+  ?work wdt:P179 ?series.
+  %(author)s
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+} LIMIT 10"""
+AUTHOR_CHECK = """?work wdt:P50 ?author. ?author rdfs:label ?an.
+  FILTER(LANG(?an) = "en" && CONTAINS(LCASE(STR(?an)), %s))"""
+BOOKS_IN_SERIES = """SELECT ?work ?workLabel ?ord ?date WHERE {
+  ?work p:P179 ?st. ?st ps:P179 wd:%s.
+  OPTIONAL { ?st pq:P1545 ?ord. }
+  OPTIONAL { ?work wdt:P577 ?date. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}"""
+
+
+def wikidata_series_for(title, author):
+    """Series (id, name) a book belongs to, found by searching Wikidata for its title and
+    checking the author's surname, so a book of the same name by someone else doesn't match."""
+    surname = author.split()[-1].lower() if author and author.split() else ""
+    q = SERIES_FOR_BOOK % {"title": json.dumps(title), "author": AUTHOR_CHECK % json.dumps(surname) if surname else ""}
+    return [(b["series"]["value"].rsplit("/", 1)[-1], b.get("seriesLabel", {}).get("value", "")) for b in sparql(q)]
+
+
+def wikidata_series_books(qid):
+    """[(number, title, year)] for every book in a series, in order."""
+    rows = {}
+    for b in sparql(BOOKS_IN_SERIES % qid):
+        title = b.get("workLabel", {}).get("value", "")
+        if not title or re.fullmatch(r"Q\d+", title):      # no English name
+            continue
+        try:
+            no = float(b["ord"]["value"]) if "ord" in b else None
+        except ValueError:
+            no = None
+        year = (b.get("date", {}).get("value") or "")[:4] or None
+        key = b["work"]["value"]
+        if key not in rows or (rows[key][0] is None and no is not None):
+            rows[key] = (no, title, year)
+    books = list(rows.values())
+    if books and not any(no is not None for no, _, _ in books):     # no numbers given: go by publication date
+        books = [(float(i + 1), t, y) for i, (_, t, y) in enumerate(sorted(books, key=lambda x: x[2] or "9999"))]
+    return sorted({no: (no, t, y) for no, t, y in books if no is not None and 0 < no < 500}.values())
+
+
+def similar(a, b):
+    wa = set(norm_title(a).split()) - {"series", "adventure", "novel", "novels", "book", "books", "saga"}
+    wb = set(norm_title(b).split())
+    return len(wa & wb) / max(1, len(wa | wb))
+
+
+def look_up_series(name):
+    """Find a series on Wikidata from the books you have in it, store its full list of books,
+    and number any of your books in it that had no number."""
+    with db() as c:
+        books = c.execute("SELECT title, authors FROM books WHERE series=? COLLATE NOCASE "
+                          "ORDER BY series_no IS NULL, status='wishlist' LIMIT 3", (name,)).fetchall()
+    found = None
+    for b in books:
+        author = (json.loads(b["authors"] or "[]") or [""])[0]
+        cands = wikidata_series_for(b["title"], author)
+        if cands:
+            found = max(cands, key=lambda x: similar(name, x[1]))
+            break
+    catalog = wikidata_series_books(found[0]) if found else []
+    with db() as c:
+        c.execute("INSERT INTO series_info (name, checked_at) VALUES (?, ?) "
+                  "ON CONFLICT(name) DO UPDATE SET checked_at=excluded.checked_at", (name, now()))
+        if not catalog:
+            return False
+        c.execute("UPDATE series_info SET wikidata=?, wikidata_name=? WHERE name=?", (found[0], found[1], name))
+        c.execute("DELETE FROM series_catalog WHERE series=?", (name,))
+        c.executemany("INSERT INTO series_catalog (series, no, title, year) VALUES (?, ?, ?, ?)",
+                      [(name, no, t, y) for no, t, y in catalog])
+        by_title = {norm_title(t): no for no, t, _ in catalog}
+        for r in c.execute("SELECT id, title FROM books WHERE series=? COLLATE NOCASE AND series_no IS NULL", (name,)).fetchall():
+            if norm_title(r["title"]) in by_title:
+                c.execute("UPDATE books SET series_no=? WHERE id=?", (by_title[norm_title(r["title"])], r["id"]))
+    return True
+
+
+SERIES_JOB = {"running": False, "done": 0, "total": 0, "found": 0}
+
+
+def look_up_all_series(names):
+    if SERIES_JOB["running"] or not names:
+        return False
+    SERIES_JOB.update(running=True, done=0, total=len(names), found=0)
+
+    def work():
+        try:
+            for n in names:
+                try:
+                    if look_up_series(n):
+                        SERIES_JOB["found"] += 1
+                except Exception as e:          # one odd series mustn't stop the rest
+                    print("Series lookup failed for", n, e, flush=True)
+                SERIES_JOB["done"] += 1
+                time.sleep(0.5)
+        finally:
+            SERIES_JOB["running"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+    return True
 
 
 # ---------------------------------------------------------------- background jobs (imports, covers)
@@ -1077,8 +1203,32 @@ def fill_bookcase(case_id: int, body: dict):
 # ---------------------------------------------------------------- series
 @app.get("/api/series-info")
 def series_info():
+    """How many books each series has, when you've said."""
     with db() as c:
-        return {r["name"]: r["total"] for r in c.execute("SELECT * FROM series_info")}
+        return {r["name"]: r["total"] for r in c.execute("SELECT * FROM series_info WHERE total IS NOT NULL")}
+
+
+@app.get("/api/series-catalog")
+def series_catalog():
+    """Every series' full list of books from Wikidata, and which series haven't been looked up yet."""
+    with db() as c:
+        out = {}
+        for r in c.execute("SELECT * FROM series_info WHERE wikidata IS NOT NULL"):
+            out[r["name"].lower()] = {"name": r["name"], "wikidata": r["wikidata"], "wikidata_name": r["wikidata_name"], "books": []}
+        for r in c.execute("SELECT * FROM series_catalog ORDER BY no"):
+            if r["series"].lower() in out:
+                out[r["series"].lower()]["books"].append({"no": r["no"], "title": r["title"], "year": r["year"]})
+        checked = {r[0].lower() for r in c.execute("SELECT name FROM series_info WHERE checked_at IS NOT NULL")}
+        unchecked = sorted({r[0] for r in c.execute("SELECT DISTINCT series FROM books WHERE series IS NOT NULL")
+                            if r[0].lower() not in checked})
+    return {"series": out, "unchecked": unchecked, "job": SERIES_JOB}
+
+
+@app.post("/api/series/lookup")
+def series_lookup(body: dict):
+    """Look series up on Wikidata in the background: the given one again, or all not tried yet."""
+    names = [body["name"]] if body.get("name") else series_catalog()["unchecked"]
+    return {"started": look_up_all_series(names), "count": len(names)}
 
 
 @app.put("/api/series-info")
@@ -1089,7 +1239,7 @@ def set_series_info(body: dict):
     total = body.get("total")
     with db() as c:
         if total in (None, "", 0):
-            c.execute("DELETE FROM series_info WHERE name=?", (name,))
+            c.execute("UPDATE series_info SET total=NULL WHERE name=?", (name,))
         else:
             c.execute("INSERT INTO series_info (name, total) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET total=excluded.total",
                       (name, int(total)))
@@ -1105,8 +1255,10 @@ def rename_series(body: dict):
         c.execute("UPDATE books SET series=? WHERE series=? COLLATE NOCASE", (new, old))
         if c.execute("SELECT 1 FROM series_info WHERE name=?", (new,)).fetchone():
             c.execute("DELETE FROM series_info WHERE name=? AND name != ?", (old, new))   # merging into a series you have
+            c.execute("DELETE FROM series_catalog WHERE series=? AND series != ?", (old, new))
         else:
             c.execute("UPDATE series_info SET name=? WHERE name=?", (new, old))
+            c.execute("UPDATE series_catalog SET series=? WHERE series=?", (new, old))
     return {"ok": True}
 
 

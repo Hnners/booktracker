@@ -418,3 +418,14 @@ details .grid-2 { margin-top: 10px; }
 .spine-bubble::before { content: ""; position: absolute; top: -6px; left: calc(var(--arrow, 50%) - 6px); border: 6px solid transparent; border-top: 0; border-bottom-color: var(--ink); }
 .spine-bubble.above::before { top: auto; bottom: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: var(--ink); }
 @media (prefers-color-scheme: dark) { .spine-bubble .loan { color: #2c6475; } }
+
+/* ---------- series books not added yet (titles from Wikidata) */
+.cover.gap.titled { display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; text-align: left; padding: 12% 10%;
+  background: color-mix(in srgb, var(--line) 45%, transparent); border: 2px dashed var(--line); opacity: .75; filter: grayscale(1); }
+.cover.gap.titled .gap-no { font-size: 1rem; font-weight: 800; }
+.cover.gap.titled .gap-title { font-family: var(--display); font-size: .92rem; font-weight: 700; line-height: 1.15; color: var(--ink);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+.cover.gap.titled small { font-size: .7rem; }
+.tile.missing.known .tile-title { color: var(--muted); }
+.tile.missing.known:hover .cover.gap.titled { opacity: 1; border-color: var(--accent); }
+.series-status:empty { display: none; }

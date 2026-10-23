@@ -638,7 +638,30 @@ VIEWS.authors = function () {
 };
 
 // ---------------------------------------------------------------- Series
-VIEWS.series = function () {
+// Every series' full list of books, from Wikidata (looked up in the background the first time
+// the Series page sees a series), so missing books can be shown by name.
+let CATALOG = { series: {}, unchecked: [], job: {} };
+let catalogWatch = 0;
+async function loadCatalog() {
+  try { CATALOG = await api("/series-catalog"); } catch {}
+}
+async function watchSeriesLookup(status) {
+  clearTimeout(catalogWatch);
+  const j = CATALOG.job || {};
+  if (status) status.textContent = j.running ? `Looking up series on Wikidata… ${j.done} of ${j.total}` : "";
+  if (!j.running) return;
+  catalogWatch = setTimeout(async () => {
+    await loadCatalog();
+    if (!CATALOG.job.running) { await loadAll(); if (current === "series") rerender(); return; }
+    if (current === "series") watchSeriesLookup(document.querySelector(".series-status"));
+  }, 2000);
+}
+
+VIEWS.series = async function () {
+  await loadCatalog();
+  if (CATALOG.unchecked.length && !CATALOG.job.running) {
+    try { await api("/series/lookup", { method: "POST", body: {} }); await loadCatalog(); } catch {}
+  }
   const groups = new Map();
   for (const b of BOOKS) if (b.series) {
     const key = b.series.toLowerCase();
@@ -650,19 +673,26 @@ VIEWS.series = function () {
     return known ? known[1] : null;
   };
   const all = [...groups.values()].map((s) => {
+    const cat = CATALOG.series[s.name.toLowerCase()] || null;
+    const listed = cat ? cat.books.filter((x) => Number.isInteger(+x.no)) : [];
     const nos = s.books.map((b) => b.series_no).filter((n) => n != null && Number.isInteger(+n) && n > 0);
-    const known = totalOf(s);
+    const yours = totalOf(s);
+    // how many books: what you set, else what Wikidata lists, else your highest number
+    const fromList = listed.length ? Math.max(...listed.map((x) => +x.no)) : 0;
+    const known = yours || fromList || null;
     const total = known || (nos.length ? Math.max(...nos) : 0);
     const ownedNos = new Set(s.books.filter((b) => b.status === "owned").map((b) => +b.series_no));
     const missing = [];
     for (let n = 1; n <= total; n++) if (!ownedNos.has(n)) missing.push(n);
-    return { ...s, total, known: !!known, missing, authors: [...new Set(s.books.flatMap((b) => b.authors))] };
+    const titles = Object.fromEntries((cat ? cat.books : []).map((x) => [+x.no, x]));
+    return { ...s, total, known: !!known, missing, titles, cat, authors: [...new Set(s.books.flatMap((b) => b.authors))] };
   }).sort((a, b) => a.name.localeCompare(b.name));
   const filter = h("select", { "aria-label": "Show" }, h("option", { value: "all" }, "All series"),
     h("option", { value: "gaps" }, "With books missing"), h("option", { value: "done" }, "Complete"));
   filter.value = store.get("series_filter", "all");
   const q = h("input", { type: "search", placeholder: "Find a series", "aria-label": "Find a series" });
   const list = h("div", { class: "series-list" });
+  const status = h("p", { class: "muted small series-status", "aria-live": "polite" });
   const draw = () => {
     store.set("series_filter", filter.value);
     const shown = all.filter((s) => (filter.value === "all" || (filter.value === "gaps" ? s.missing.length || !s.known : s.known && !s.missing.length)) &&
@@ -675,16 +705,24 @@ VIEWS.series = function () {
     all.length ? h("div", { class: "controls" }, q, filter) :
       empty("No series yet", "Books found online usually come with their series. You can also type a series and number on any book.",
         h("a", { class: "btn", href: "#library" }, "Go to the library")),
-    list);
+    status, list);
   draw();
+  watchSeriesLookup(status);
 };
+function findMissing(s, n) {
+  const t = s.titles[n];
+  ADD_CONTEXT = { series: s.name, series_no: n };
+  location.hash = `#add?q=${encodeURIComponent(t ? `${t.title} ${s.authors[0] || ""}` : `${s.name} ${n} ${s.authors[0] || ""}`)}&to=wishlist`;
+}
 function seriesCard(s) {
   const slots = [];
   const used = new Set();
   for (let n = 1; n <= s.total; n++) {
     const here = s.books.filter((b) => +b.series_no === n).sort((a, b) => (a.status === "owned" ? -1 : 1));
+    // a long run of gaps with no titles to show folds into one tile
     let run = 0;
-    while (!here.length && n + run + 1 <= s.total && !s.books.some((b) => +b.series_no === n + run + 1)) run++;
+    while (!here.length && !s.titles[n] && n + run + 1 <= s.total && !s.titles[n + run + 1] &&
+      !s.books.some((b) => +b.series_no === n + run + 1)) run++;
     if (run >= 3) {
       const from = n, to = n + run;
       slots.push(h("button", { class: "tile missing", type: "button", onclick: () => location.hash = `#add?q=${encodeURIComponent(`${s.name} ${s.authors[0] || ""}`)}&to=wishlist` },
@@ -693,10 +731,16 @@ function seriesCard(s) {
       n = to;
       continue;
     }
-    if (here.length) { here.forEach((b) => used.add(b.id)); slots.push(bookTile(here[0], `#${n}`)); }
-    else slots.push(h("button", { class: "tile missing", type: "button", title: "Find it and add it to the wishlist",
-      onclick: () => { ADD_CONTEXT = { series: s.name, series_no: n }; location.hash = `#add?q=${encodeURIComponent(`${s.name} ${n} ${s.authors[0] || ""}`)}&to=wishlist`; } },
-      h("div", { class: "cover gap" }, h("span", {}, `#${n}`), h("small", {}, "Find it")), h("span", { class: "tile-title" }, "Missing"), h("span", { class: "tile-sub" }, `Book ${n}`)));
+    if (here.length) { here.forEach((b) => used.add(b.id)); slots.push(bookTile(here[0], `#${n}`)); continue; }
+    const t = s.titles[n];
+    slots.push(t
+      // a book in the series you haven't added: greyed out, with its title
+      ? h("button", { class: "tile missing known", type: "button", title: `Find ${t.title} and add it to the wishlist`, onclick: () => findMissing(s, n) },
+          h("div", { class: "cover gap titled" }, h("span", { class: "gap-no" }, `#${n}`), h("span", { class: "gap-title" }, t.title),
+            h("small", {}, s.authors[0] || "")),
+          h("span", { class: "tile-title" }, t.title), h("span", { class: "tile-sub" }, `#${n} · not added yet${t.year ? " · " + t.year : ""}`))
+      : h("button", { class: "tile missing", type: "button", title: "Find it and add it to the wishlist", onclick: () => findMissing(s, n) },
+          h("div", { class: "cover gap" }, h("span", {}, `#${n}`), h("small", {}, "Find it")), h("span", { class: "tile-title" }, "Missing"), h("span", { class: "tile-sub" }, `Book ${n}`)));
   }
   for (const b of s.books.filter((b) => !used.has(b.id)).sort((a, b) => (a.series_no || 999) - (b.series_no || 999)))
     slots.push(bookTile(b, b.series_no != null ? `#${fmtNo(b.series_no)}` : "No number"));
@@ -724,12 +768,29 @@ function editSeries(s) {
       await loadAll(); closeModal(); rerender();
     } catch (err) { fail(err); }
   };
+  const again = async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      const r = await api("/series/lookup", { method: "POST", body: { name: s.name } });
+      toast(r.started ? "Looking it up on Wikidata…" : "Already looking series up; try again in a moment");
+      closeModal(); await loadCatalog(); rerender();
+    } catch (err) { fail(err); }
+  };
+  const cat = s.cat;
   openModal(h("form", { class: "form", onsubmit: save },
     h("div", { class: "modal-head" }, h("h2", {}, s.name), closeBtn()),
     h("label", { class: "field" }, "Series name", name),
+    cat && cat.wikidata_name && cat.wikidata_name.toLowerCase() !== s.name.toLowerCase()
+      ? h("p", { class: "small" }, "Wikidata calls it ", h("strong", {}, cat.wikidata_name), ". ",
+          h("button", { class: "linkish", type: "button", onclick: () => { name.value = cat.wikidata_name; } }, "Use that name")) : null,
     h("label", { class: "field" }, "How many books are in the series?", total),
-    h("p", { class: "muted small" }, "With this set, the app shows which numbers you're missing, even ones after the last book you have. Leave it blank to count up to your highest number."),
-    h("div", { class: "row end" }, h("button", { class: "btn primary", type: "submit" }, "Save"))));
+    h("p", { class: "muted small" }, cat
+      ? `Wikidata lists ${plural(cat.books.length, "book")} in this series, so the missing ones are shown by name. Set a number here only if that's wrong.`
+      : "Not found on Wikidata, so the app can't list the books you're missing. Set how many there are to see the gaps after your last one."),
+    h("div", { class: "row between" },
+      h("span", {}, cat ? h("a", { class: "small", href: `https://www.wikidata.org/wiki/${cat.wikidata}`, target: "_blank", rel: "noopener" }, "See it on Wikidata") : null,
+        " ", h("button", { class: "btn small quiet", type: "button", onclick: again }, cat ? "Look it up again" : "Try Wikidata again")),
+      h("button", { class: "btn primary", type: "submit" }, "Save"))));
 }
 
 // ---------------------------------------------------------------- Wishlist
