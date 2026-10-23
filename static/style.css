@@ -365,8 +365,8 @@ details .grid-2 { margin-top: 10px; }
 
 /* ---------- stacks: books lying flat */
 .shelf { position: relative; }
-.stack { position: relative; flex: none; display: flex; flex-direction: column-reverse; align-items: flex-start; align-self: flex-end; padding-top: 12px; margin: 0 2px; min-width: 24px; }
-.stack.stack-empty { width: var(--w); min-height: 46px; padding: 14px 6px 6px; justify-content: center; align-items: center; border: 2px dashed rgba(255,255,255,.5); border-bottom: 0; border-radius: 6px 6px 0 0; }
+.stack { position: relative; flex: none; display: flex; flex-direction: column-reverse; align-items: flex-start; align-self: flex-end; padding-top: 12px; margin: 0 2px; min-width: var(--sw, 24px); }
+.stack.stack-empty { width: var(--sw); min-height: 46px; padding: 14px 6px 6px; justify-content: center; align-items: center; border: 2px dashed rgba(255,255,255,.5); border-bottom: 0; border-radius: 6px 6px 0 0; }
 .wood-white .stack.stack-empty, .wood-pine .stack.stack-empty { border-color: rgba(60,40,20,.35); }
 .stack-hint { font-size: 11px; line-height: 1.2; color: rgba(255,255,255,.85); text-align: center; pointer-events: none; }
 .wood-white .stack-hint, .wood-pine .stack-hint { color: rgba(60,40,20,.7); }

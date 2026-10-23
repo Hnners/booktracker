@@ -336,7 +336,9 @@ function caseEl(c, scale, mine) {
     const over = used > c.width_cm * 10;
     shelves.push(h("div", { class: "shelf" + (over ? " over" : ""), style: `height:${(c.shelf_height_cm * 10 * scale).toFixed(0)}px` },
       h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, items.map((it) => it.book ? spineEl(it.book, scale) :
-        h("div", { class: "stack" + (it.books.length ? "" : " stack-empty"), "data-stack": it.stack.id, style: `--w:${(140 * scale).toFixed(0)}px` },
+        // a stack keeps its lying-flat width even while open, so it doesn't jump about under the pointer
+        h("div", { class: "stack" + (it.books.length ? "" : " stack-empty"), "data-stack": it.stack.id,
+          style: `--sw:${((it.books.length ? Math.max(...it.books.map((b) => b.height)) : 140) * scale).toFixed(0)}px` },
           it.books.map((b) => spineEl(b, scale)),
           h("div", { class: "stack-top" },
             h("span", { class: "stack-grip", title: "Drag to move the whole stack" }),
