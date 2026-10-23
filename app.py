@@ -118,7 +118,9 @@ def setup():
             shelf_height_cm REAL NOT NULL DEFAULT 30, wood TEXT DEFAULT 'oak', pos INTEGER DEFAULT 0)""")
         c.execute("CREATE TABLE IF NOT EXISTS series_info (name TEXT PRIMARY KEY COLLATE NOCASE, total INTEGER)")
         info_cols = [r[1] for r in c.execute("PRAGMA table_info(series_info)")]
-        for col in ("wikidata", "wikidata_name", "checked_at"):
+        c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        # where a series' list came from: wikidata/wikidata_name hold that source's id and name
+        for col in ("wikidata", "wikidata_name", "checked_at", "source", "source_url"):
             if col not in info_cols:
                 c.execute(f"ALTER TABLE series_info ADD COLUMN {col} TEXT")
         # every book in a series as Wikidata lists it, so the missing ones can be shown by name
@@ -686,26 +688,150 @@ def similar(a, b):
     return len(wa & wb) / max(1, len(wa | wb))
 
 
+# ---------------------------------------------------------------- whole series, from Hardcover
+# hardcover.app has the best series data, newer and smaller series included. Its API needs a free
+# personal key (hardcover.app > Settings > Hardcover API), pasted in More. The key stays here on
+# the server: Hardcover doesn't allow it in a browser, and it's never sent to the page.
+HARDCOVER = os.environ.get("HARDCOVER_URL", "https://api.hardcover.app/v1/graphql")
+
+
+def setting(key, value=None, delete=False):
+    with db() as c:
+        if delete:
+            c.execute("DELETE FROM settings WHERE key=?", (key,))
+        elif value is not None:
+            c.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                      (key, value))
+        r = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return r[0] if r else None
+
+
+def hardcover(query, variables=None, token=None):
+    """Run a Hardcover GraphQL query; None if there's no key or it fails."""
+    token = token or setting("hardcover_token")
+    if not token:
+        return None
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    req = urllib.request.Request(HARDCOVER, data=body, method="POST", headers={
+        "Content-Type": "application/json", "User-Agent": UA,
+        "Authorization": token if token.lower().startswith("bearer ") else f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        LOOKUP_PROBLEMS.append(f"Hardcover said {e.code} {e.reason}")
+        print("Hardcover problem:", e.code, e.read()[:300], flush=True)
+        return None
+    except (OSError, ValueError) as e:
+        LOOKUP_PROBLEMS.append(f"couldn't reach Hardcover ({e})")
+        return None
+    if data.get("errors"):
+        print("Hardcover problem:", data["errors"], flush=True)
+        LOOKUP_PROBLEMS.append(f"Hardcover: {data['errors'][0].get('message', 'error')}")
+    return data.get("data")
+
+
+def hits(results):
+    """Hardcover's search answers come straight from its search engine: dig the documents out."""
+    if isinstance(results, str):
+        try:
+            results = json.loads(results)
+        except ValueError:
+            return []
+    return [h.get("document", h) for h in (results or {}).get("hits") or []]
+
+
+SEARCH = """query($q: String!, $t: String!) { search(query: $q, query_type: $t, per_page: 8, page: 1) { results } }"""
+BOOK_SERIES = """query($ids: [Int!]) { books(where: {id: {_in: $ids}}) { id title
+  contributions { author { name } }
+  book_series { position featured series { id name slug } } } }"""
+SERIES_BOOKS = """query($id: Int!) { series(where: {id: {_eq: $id}}) { id name slug
+  book_series(distinct_on: position, order_by: [{position: asc}, {book: {users_count: desc}}],
+    where: {compilation: {_eq: false}, position: {_is_null: false},
+            book: {canonical_id: {_is_null: true}, is_partial_book: {_eq: false}}}) {
+    position book { title release_year } } } }"""
+
+
+def hardcover_series_for(name, title, author):
+    """The Hardcover series (id, name, slug) for one of your books: search for the book, then
+    take the series it's in that best matches your series name. Failing that, search series."""
+    surname = author.split()[-1].lower() if author and author.split() else ""
+    data = hardcover(SEARCH, {"q": f"{title} {author}".strip(), "t": "Book"}) or {}
+    ids = []
+    for d in hits((data.get("search") or {}).get("results")):
+        names = " ".join(d.get("author_names") or []).lower()
+        if norm_title(d.get("title", "")).startswith(norm_title(title)[:20]) and (not surname or surname in names):
+            try:
+                ids.append(int(d.get("id")))
+            except (TypeError, ValueError):
+                pass
+    cands = []
+    if ids:
+        books = (hardcover(BOOK_SERIES, {"ids": ids[:3]}) or {}).get("books") or []
+        for b in books:
+            for bs in b.get("book_series") or []:
+                s = bs.get("series") or {}
+                if s.get("id"):
+                    cands.append((similar(name, s.get("name", "")) + (.2 if bs.get("featured") else 0), s))
+    if not cands:
+        data = hardcover(SEARCH, {"q": name, "t": "Series"}) or {}
+        for d in hits((data.get("search") or {}).get("results")):
+            if not surname or surname in (d.get("author_name") or "").lower():
+                try:
+                    cands.append((similar(name, d.get("name", "")), {"id": int(d["id"]), "name": d.get("name"), "slug": d.get("slug")}))
+                except (KeyError, TypeError, ValueError):
+                    pass
+    return max(cands, key=lambda x: x[0])[1] if cands else None
+
+
+def hardcover_series_books(series_id):
+    """[(number, title, year)] for a Hardcover series: one book per position, whole numbers only
+    (so novellas like #1.5 don't count as gaps), no omnibus editions."""
+    rows = ((hardcover(SERIES_BOOKS, {"id": int(series_id)}) or {}).get("series") or [{}])[0].get("book_series") or []
+    out = {}
+    for r in rows:
+        try:
+            no = float(r.get("position"))
+        except (TypeError, ValueError):
+            continue
+        b = r.get("book") or {}
+        if b.get("title") and no > 0 and no.is_integer() and no not in out:
+            out[no] = (no, b["title"], str(b["release_year"]) if b.get("release_year") else None)
+    return sorted(out.values())
+
+
 def look_up_series(name):
-    """Find a series on Wikidata from the books you have in it, store its full list of books,
-    and number any of your books in it that had no number."""
+    """Find a series' full list of books from the books you have in it: Hardcover first when
+    you've given a key, then Wikidata. Store the list and number any of your books in it that
+    had no number."""
     with db() as c:
         books = c.execute("SELECT title, authors FROM books WHERE series=? COLLATE NOCASE "
                           "ORDER BY series_no IS NULL, status='wishlist' LIMIT 3", (name,)).fetchall()
-    found = None
-    for b in books:
-        author = (json.loads(b["authors"] or "[]") or [""])[0]
-        cands = wikidata_series_for(b["title"], author)
-        if cands:
-            found = max(cands, key=lambda x: similar(name, x[1]))
-            break
-    catalog = wikidata_series_books(found[0]) if found else []
+    found = catalog = None
+    if setting("hardcover_token"):
+        for b in books:
+            s = hardcover_series_for(name, b["title"], (json.loads(b["authors"] or "[]") or [""])[0])
+            if s:
+                catalog = hardcover_series_books(s["id"])
+                if catalog:
+                    found = ("hardcover", str(s["id"]), s.get("name") or name,
+                             f"https://hardcover.app/series/{s['slug']}" if s.get("slug") else "https://hardcover.app")
+                    break
+    if not catalog:
+        for b in books:
+            cands = wikidata_series_for(b["title"], (json.loads(b["authors"] or "[]") or [""])[0])
+            if cands:
+                qid, label = max(cands, key=lambda x: similar(name, x[1]))
+                catalog = wikidata_series_books(qid)
+                if catalog:
+                    found = ("wikidata", qid, label, f"https://www.wikidata.org/wiki/{qid}")
+                break
     with db() as c:
         c.execute("INSERT INTO series_info (name, checked_at) VALUES (?, ?) "
                   "ON CONFLICT(name) DO UPDATE SET checked_at=excluded.checked_at", (name, now()))
         if not catalog:
             return False
-        c.execute("UPDATE series_info SET wikidata=?, wikidata_name=? WHERE name=?", (found[0], found[1], name))
+        c.execute("UPDATE series_info SET source=?, wikidata=?, wikidata_name=?, source_url=? WHERE name=?", (*found, name))
         c.execute("DELETE FROM series_catalog WHERE series=?", (name,))
         c.executemany("INSERT INTO series_catalog (series, no, title, year) VALUES (?, ?, ?, ?)",
                       [(name, no, t, y) for no, t, y in catalog])
@@ -1261,7 +1387,9 @@ def series_catalog():
     with db() as c:
         out = {}
         for r in c.execute("SELECT * FROM series_info WHERE wikidata IS NOT NULL"):
-            out[r["name"].lower()] = {"name": r["name"], "wikidata": r["wikidata"], "wikidata_name": r["wikidata_name"], "books": []}
+            out[r["name"].lower()] = {"name": r["name"], "source": "Hardcover" if r["source"] == "hardcover" else "Wikidata",
+                                      "source_name": r["wikidata_name"], "books": [],
+                                      "url": r["source_url"] or f"https://www.wikidata.org/wiki/{r['wikidata']}"}
         for r in c.execute("SELECT * FROM series_catalog ORDER BY no"):
             if r["series"].lower() in out:
                 out[r["series"].lower()]["books"].append({"no": r["no"], "title": r["title"], "year": r["year"]})
@@ -1269,6 +1397,32 @@ def series_catalog():
         unchecked = sorted({r[0] for r in c.execute("SELECT DISTINCT series FROM books WHERE series IS NOT NULL")
                             if r[0].lower() not in checked})
     return {"series": out, "unchecked": unchecked, "job": SERIES_JOB}
+
+
+@app.get("/api/settings")
+def settings():
+    """What's set up (never the key itself)."""
+    return {"hardcover": bool(setting("hardcover_token"))}
+
+
+@app.put("/api/settings/hardcover")
+def set_hardcover(body: dict):
+    """Save a Hardcover key after checking it works, then look up again every series that
+    wasn't found before."""
+    token = (body.get("token") or "").strip()
+    if not token:
+        setting("hardcover_token", delete=True)
+        return settings()
+    LOOKUP_PROBLEMS.clear()
+    me = hardcover("query { me { username } }", token=token)
+    if not me or not me.get("me"):
+        raise HTTPException(400, "Hardcover didn't accept that key" + (f": {LOOKUP_PROBLEMS[-1]}" if LOOKUP_PROBLEMS else ""))
+    setting("hardcover_token", token)
+    with db() as c:
+        c.execute("UPDATE series_info SET checked_at=NULL WHERE wikidata IS NULL")
+    look_up_all_series(series_catalog()["unchecked"])
+    user = me["me"][0] if isinstance(me["me"], list) and me["me"] else me["me"]
+    return {**settings(), "user": (user or {}).get("username")}
 
 
 @app.post("/api/series/lookup")

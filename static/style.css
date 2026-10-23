@@ -429,3 +429,4 @@ details .grid-2 { margin-top: 10px; }
 .tile.missing.known .tile-title { color: var(--muted); }
 .tile.missing.known:hover .cover.gap.titled { opacity: 1; border-color: var(--accent); }
 .series-status:empty { display: none; }
+.ok { color: var(--ok); }

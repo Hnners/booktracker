@@ -648,7 +648,7 @@ async function loadCatalog() {
 async function watchSeriesLookup(status) {
   clearTimeout(catalogWatch);
   const j = CATALOG.job || {};
-  if (status) status.textContent = j.running ? `Looking up series on Wikidata… ${j.done} of ${j.total}` : "";
+  if (status) status.textContent = j.running ? `Looking up series… ${j.done} of ${j.total}` : "";
   if (!j.running) return;
   catalogWatch = setTimeout(async () => {
     await loadCatalog();
@@ -772,7 +772,7 @@ function editSeries(s) {
     e.currentTarget.disabled = true;
     try {
       const r = await api("/series/lookup", { method: "POST", body: { name: s.name } });
-      toast(r.started ? "Looking it up on Wikidata…" : "Already looking series up; try again in a moment");
+      toast(r.started ? "Looking it up…" : "Already looking series up; try again in a moment");
       closeModal(); await loadCatalog(); rerender();
     } catch (err) { fail(err); }
   };
@@ -780,16 +780,16 @@ function editSeries(s) {
   openModal(h("form", { class: "form", onsubmit: save },
     h("div", { class: "modal-head" }, h("h2", {}, s.name), closeBtn()),
     h("label", { class: "field" }, "Series name", name),
-    cat && cat.wikidata_name && cat.wikidata_name.toLowerCase() !== s.name.toLowerCase()
-      ? h("p", { class: "small" }, "Wikidata calls it ", h("strong", {}, cat.wikidata_name), ". ",
-          h("button", { class: "linkish", type: "button", onclick: () => { name.value = cat.wikidata_name; } }, "Use that name")) : null,
+    cat && cat.source_name && cat.source_name.toLowerCase() !== s.name.toLowerCase()
+      ? h("p", { class: "small" }, `${cat.source} calls it `, h("strong", {}, cat.source_name), ". ",
+          h("button", { class: "linkish", type: "button", onclick: () => { name.value = cat.source_name; } }, "Use that name")) : null,
     h("label", { class: "field" }, "How many books are in the series?", total),
     h("p", { class: "muted small" }, cat
-      ? `Wikidata lists ${plural(cat.books.length, "book")} in this series, so the missing ones are shown by name. Set a number here only if that's wrong.`
-      : "Not found on Wikidata, so the app can't list the books you're missing. Set how many there are to see the gaps after your last one."),
+      ? `${cat.source} lists ${plural(cat.books.length, "book")} in this series, so the missing ones are shown by name. Set a number here only if that's wrong.`
+      : "Not found online, so the app can't list the books you're missing. Set how many there are to see the gaps after your last one. (Adding a Hardcover key under More finds many more series.)"),
     h("div", { class: "row between" },
-      h("span", {}, cat ? h("a", { class: "small", href: `https://www.wikidata.org/wiki/${cat.wikidata}`, target: "_blank", rel: "noopener" }, "See it on Wikidata") : null,
-        " ", h("button", { class: "btn small quiet", type: "button", onclick: again }, cat ? "Look it up again" : "Try Wikidata again")),
+      h("span", {}, cat ? h("a", { class: "small", href: cat.url, target: "_blank", rel: "noopener" }, `See it on ${cat.source}`) : null,
+        " ", h("button", { class: "btn small quiet", type: "button", onclick: again }, cat ? "Look it up again" : "Try again")),
       h("button", { class: "btn primary", type: "submit" }, "Save"))));
 }
 
@@ -1273,11 +1273,44 @@ VIEWS.more = function () {
         h("p", { class: "muted small" }, noCover ? `${plural(noCover, "book")} without a cover. The app can look for them online; it takes a second or so per book.` : "Every book has a cover."),
         noCover ? h("button", { class: "btn", type: "button", onclick: async () => {
           try { await api("/fetch-missing", { method: "POST" }); watchJob(jobBox); } catch (err) { fail(err); } } }, "Find missing covers") : null),
+      hardcoverPanel(),
       h("section", { class: "panel" }, h("h2", {}, "Export and backup"),
         h("p", { class: "muted small" }, "The CSV opens in Excel. The backup has everything, pictures included."),
         h("div", { class: "row" }, h("a", { class: "btn", href: "/api/export.csv" }, "Download CSV"), h("a", { class: "btn", href: "/api/backup" }, "Download backup")))));
   api("/job").then((j) => { if (j.running) watchJob(jobBox); });
 };
+// A Hardcover key lets the Series page find many more series (newer and smaller ones especially).
+function hardcoverPanel() {
+  const box = h("section", { class: "panel" }, h("h2", {}, "Series from Hardcover"), h("p", { class: "muted small loading" }, "Checking…"));
+  const draw = (on, user) => {
+    const key = h("input", { type: "password", placeholder: "Paste your Hardcover API key", autocomplete: "off", "aria-label": "Hardcover API key" });
+    const save = async (e) => {
+      e.preventDefault();
+      const btn = e.submitter || box.querySelector("button[type=submit]");
+      if (btn) btn.disabled = true;
+      try {
+        const r = await api("/settings/hardcover", { method: "PUT", body: { token: key.value } });
+        toast(`Connected to Hardcover${r.user ? " as " + r.user : ""}. Looking up your series…`);
+        draw(true, r.user);
+      } catch (err) { fail(err); if (btn) btn.disabled = false; }
+    };
+    const remove = async () => {
+      if (!confirm("Remove the Hardcover key? Series already found stay as they are.")) return;
+      try { await api("/settings/hardcover", { method: "PUT", body: { token: "" } }); draw(false); } catch (err) { fail(err); }
+    };
+    box.replaceChildren(h("h2", {}, "Series from Hardcover"),
+      on ? h("p", { class: "small" }, h("strong", { class: "ok" }, "✓ Connected"), user ? ` as ${user}` : "",
+          ". Series are looked up on Hardcover first, then Wikidata.") :
+        h("p", { class: "muted small" }, "Hardcover knows far more series than Wikidata, newer and smaller ones included. Its API is free: sign in at ",
+          h("a", { href: "https://hardcover.app", target: "_blank", rel: "noopener" }, "hardcover.app"),
+          ", open Settings → Hardcover API, and copy the key. It's kept on your server and never shown again."),
+      on ? h("div", { class: "row" }, h("a", { class: "btn", href: "#series" }, "Go to Series"),
+          h("button", { class: "btn quiet danger", type: "button", onclick: remove }, "Remove key")) :
+        h("form", { class: "row inline-form", onsubmit: save }, key, h("button", { class: "btn primary", type: "submit" }, "Save")));
+  };
+  api("/settings").then((s) => draw(s.hardcover)).catch(() => draw(false));
+  return box;
+}
 async function watchJob(box) {
   let j;
   do {
