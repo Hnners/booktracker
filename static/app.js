@@ -470,11 +470,12 @@ VIEWS.series = function () {
   };
   const all = [...groups.values()].map((s) => {
     const nos = s.books.map((b) => b.series_no).filter((n) => n != null && Number.isInteger(+n) && n > 0);
-    const total = totalOf(s) || (nos.length ? Math.max(...nos) : 0);
+    const known = totalOf(s);
+    const total = known || (nos.length ? Math.max(...nos) : 0);
     const ownedNos = new Set(s.books.filter((b) => b.status === "owned").map((b) => +b.series_no));
     const missing = [];
     for (let n = 1; n <= total; n++) if (!ownedNos.has(n)) missing.push(n);
-    return { ...s, total, missing, authors: [...new Set(s.books.flatMap((b) => b.authors))] };
+    return { ...s, total, known: !!known, missing, authors: [...new Set(s.books.flatMap((b) => b.authors))] };
   }).sort((a, b) => a.name.localeCompare(b.name));
   const filter = h("select", { "aria-label": "Show" }, h("option", { value: "all" }, "All series"),
     h("option", { value: "gaps" }, "With books missing"), h("option", { value: "done" }, "Complete"));
@@ -483,13 +484,13 @@ VIEWS.series = function () {
   const list = h("div", { class: "series-list" });
   const draw = () => {
     store.set("series_filter", filter.value);
-    const shown = all.filter((s) => (filter.value === "all" || (filter.value === "gaps" ? s.missing.length : !s.missing.length)) &&
+    const shown = all.filter((s) => (filter.value === "all" || (filter.value === "gaps" ? s.missing.length || !s.known : s.known && !s.missing.length)) &&
       (!q.value.trim() || (s.name + " " + s.authors.join(" ")).toLowerCase().includes(q.value.trim().toLowerCase())));
     list.replaceChildren(...shown.map(seriesCard));
   };
   filter.addEventListener("change", draw); q.addEventListener("input", draw);
   setView(
-    pageHead("Series", [stat(all.length, "series"), stat(all.filter((s) => !s.missing.length && s.total).length, "complete")]),
+    pageHead("Series", [stat(all.length, "series"), stat(all.filter((s) => s.known && !s.missing.length).length, "complete")]),
     all.length ? h("div", { class: "controls" }, q, filter) :
       empty("No series yet", "Books found online usually come with their series. You can also type a series and number on any book.",
         h("a", { class: "btn", href: "#library" }, "Go to the library")),
@@ -519,11 +520,12 @@ function seriesCard(s) {
   for (const b of s.books.filter((b) => !used.has(b.id)).sort((a, b) => (a.series_no || 999) - (b.series_no || 999)))
     slots.push(bookTile(b, b.series_no != null ? `#${fmtNo(b.series_no)}` : "No number"));
   const ownedN = s.books.filter((b) => b.status === "owned").length;
-  const done = s.total && !s.missing.length;
+  const done = s.known && !s.missing.length;
   return h("section", { class: "series-card" + (done ? " done" : "") },
     h("div", { class: "series-head" },
       h("div", {}, h("h2", {}, s.name), h("span", { class: "muted" }, s.authors.join(", "))),
       h("div", { class: "row" },
+        !s.known ? h("button", { class: "btn small", type: "button", onclick: () => editSeries(s) }, `${plural(ownedN, "book")} · how many in the series?`) :
         s.total ? h("span", { class: "progress", title: `${s.total - s.missing.length} of ${s.total}` },
           h("span", { class: "bar" }, h("span", { style: `width:${Math.round(100 * (s.total - s.missing.length) / s.total)}%` })),
           done ? "Complete" : `${s.total - s.missing.length} of ${s.total}`) : h("span", { class: "muted" }, plural(ownedN, "book")),
@@ -634,7 +636,7 @@ VIEWS.add = function (p) {
       r.cover_preview ? h("div", { class: "thumb" }, h("img", { src: r.cover_preview, alt: "", loading: "lazy", onerror: (e) => e.target.parentNode.classList.add("none") })) : h("div", { class: "thumb none" }),
       h("div", { class: "result-body" },
         h("strong", {}, r.title, r.subtitle ? h("span", { class: "muted" }, `: ${r.subtitle}`) : null),
-        h("div", { class: "muted small" }, [(r.authors || []).join(" & ") || "Unknown author", r.year, r.series ? seriesText(r) : null, r.pages ? `${r.pages} pages` : null].filter(Boolean).join(" · ")),
+        h("div", { class: "muted small" }, [(r.authors || []).join(" & ") || "Unknown author", r.publisher, r.year, r.series ? seriesText(r) : null, r.pages ? `${r.pages} pages` : null].filter(Boolean).join(" · ")),
         r.isbn ? h("div", { class: "muted small" }, `ISBN ${r.isbn}`) : null,
         have ? h("div", { class: "have" }, have === "owned" ? `Already in the library${known ? " · " + placeText(known) : ""}` : "Already on the wishlist") : null),
       h("div", { class: "result-actions" },
@@ -884,7 +886,7 @@ function openBook(id, seed) {
       h("div", { class: "book-pics" },
         coverBox,
         isNew ? h("p", { class: "muted small" }, "You can add a cover photo once it's saved.") : h("div", { class: "row tools" },
-          h("button", { class: "btn small", type: "button", onclick: () => chooseCover(b) }, "Choose cover"),
+          h("button", { class: "btn small", type: "button", onclick: () => chooseCover(b) }, "Choose edition"),
           h("button", { class: "btn small", type: "button", onclick: async () => upload(`/books/${b.id}/cover`, await pickFile("image/*", "environment")) }, "Cover photo"),
           b.isbn ? h("button", { class: "btn small quiet", type: "button", onclick: async (e) => {
             e.currentTarget.disabled = true;
@@ -915,22 +917,37 @@ function openBook(id, seed) {
   if (isNew) setTimeout(() => f.title.focus(), 50);
 }
 
-// Pick a cover from this ISBN's and other English editions' covers
+// Switch a book to another edition (or just take its cover): this ISBN first, then the
+// other English editions, UK ones first
 async function chooseCover(b) {
-  const grid = h("div", { class: "cover-choices" }, h("p", { class: "muted loading" }, "Finding covers…"));
-  openModal(h("div", { class: "modal-head" }, h("div", {}, h("h2", {}, "Choose a cover"),
-    h("p", { class: "muted" }, b.title)), h("button", { class: "btn quiet close", type: "button", "aria-label": "Back", onclick: () => openBook(b.id) }, "✕")), grid);
+  const grid = h("div", { class: "cover-choices" }, h("p", { class: "muted loading" }, "Finding editions…"));
+  const coverOnly = h("input", { type: "checkbox" });
+  openModal(h("div", { class: "modal-head" }, h("div", {}, h("h2", {}, "Choose the edition"),
+    h("p", { class: "muted" }, "Pick the one that matches your copy. Its title, ISBN and publisher replace this book's.")),
+    h("button", { class: "btn quiet close", type: "button", "aria-label": "Back", onclick: () => openBook(b.id) }, "✕")),
+    h("label", { class: "check small", style: "margin-bottom:12px" }, coverOnly, "Only change the cover"), grid);
+  const pick = async (c, btn) => {
+    grid.querySelectorAll("button").forEach((x) => (x.disabled = true));
+    btn.classList.add("picked");
+    try {
+      if (c.edition && !coverOnly.checked) {
+        const body = Object.fromEntries(Object.entries(c.edition).filter(([, v]) => v != null && v !== ""));
+        if (Object.keys(body).length) upsert(await api(`/books/${b.id}`, { method: "PATCH", body }));
+      }
+      const fd = new FormData(); fd.append("url", c.url);
+      upsert(await api(`/books/${b.id}/cover`, { method: "POST", body: fd }));
+      toast(c.edition && !coverOnly.checked ? "Switched to that edition" : "Cover changed");
+      openBook(b.id); rerender();
+    } catch (err) { fail(err); grid.querySelectorAll("button").forEach((x) => (x.disabled = false)); }
+  };
   try {
     const list = await api(`/books/${b.id}/covers`);
-    grid.replaceChildren(...list.map((c) => h("button", { class: "cover-choice", type: "button", onclick: async (e) => {
-      grid.querySelectorAll("button").forEach((x) => (x.disabled = true));
-      e.currentTarget.classList.add("picked");
-      const fd = new FormData(); fd.append("url", c.url);
-      try { upsert(await api(`/books/${b.id}/cover`, { method: "POST", body: fd })); toast("Cover changed"); openBook(b.id); rerender(); }
-      catch (err) { fail(err); grid.querySelectorAll("button").forEach((x) => (x.disabled = false)); }
-    } }, h("div", { class: "cover" }, h("img", { src: c.preview, alt: "", loading: "lazy", onerror: (e) => e.target.closest("button").remove() })),
+    grid.replaceChildren(...list.map((c) => h("button", { class: "cover-choice", type: "button", onclick: (e) => pick(c, e.currentTarget) },
+      h("div", { class: "cover" }, h("img", { src: c.preview, alt: "", loading: "lazy", onerror: (e) => e.target.closest("button").remove() }),
+        c.uk ? h("span", { class: "ribbon uk" }, "UK") : null),
+      c.edition?.title && c.edition.title.toLowerCase() !== b.title.toLowerCase() ? h("span", { class: "tile-title" }, c.edition.title) : null,
       h("span", { class: "tile-sub" }, c.label))));
-    if (!list.length) grid.replaceChildren(h("p", { class: "muted" }, "No other covers found. You can take a photo of the cover instead."));
+    if (!list.length) grid.replaceChildren(h("p", { class: "muted" }, "No other editions found. You can take a photo of the cover instead."));
   } catch (err) { grid.replaceChildren(h("p", { class: "error" }, err.message)); }
 }
 

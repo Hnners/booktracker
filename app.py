@@ -403,43 +403,59 @@ def search_books(q):
     return results[:24]
 
 
-def cover_choices(r):
-    """Covers to choose from for a book: this ISBN's own (Google, Open Library), then
-    covers of the other English editions of the same book."""
+UK_PLACES = ("london", "uk", "united kingdom", "england", "edinburgh", "great britain", "oxford", "harmondsworth",
+             "glasgow", "manchester", "cardiff", "dublin")
+
+
+def edition_choices(r):
+    """Editions to choose between for a book: this ISBN first, then the other English editions
+    of the same book with a cover, UK ones first. Each carries its details so picking one can
+    switch the book to that edition."""
     out, seen = [], set()
 
-    def add(url, preview, label):
+    def add(url, preview, **info):
         if url and url not in seen:
             seen.add(url)
-            out.append({"url": url, "preview": preview or url, "label": label})
+            out.append({"url": url, "preview": preview or url, **info})
 
     work_key = None
     if r["isbn"]:
         g = from_google(r["isbn"])
         if g.get("cover_urls"):
-            add(g["cover_urls"][0], g["cover_urls"][-1], "Google Books, this ISBN")
+            add(g["cover_urls"][0], g["cover_urls"][-1], label="This ISBN (Google Books)", current=True)
         ed = http_json(f"{OL}/isbn/{r['isbn']}.json") or {}
         for cid in ed.get("covers") or []:
             if cid and cid > 0:
-                add(f"{OL_COVERS}/b/id/{cid}-L.jpg", f"{OL_COVERS}/b/id/{cid}-M.jpg", "Open Library, this ISBN")
+                add(f"{OL_COVERS}/b/id/{cid}-L.jpg", f"{OL_COVERS}/b/id/{cid}-M.jpg", label="This ISBN (Open Library)", current=True)
         if ed.get("works"):
             work_key = ed["works"][0]["key"]
     if not work_key:
         author = (json.loads(r["authors"] or "[]") or [""])[0]
         hit = http_json(f"{OL}/search.json?q={urllib.parse.quote(r['title'] + ' ' + author)}&lang={LANG}&limit=1&fields=key") or {}
         work_key = ((hit.get("docs") or [{}])[0]).get("key")
-    if work_key:
-        eds = http_json(f"{OL}{work_key}/editions.json?limit=200") or {}
-        for e in eds.get("entries") or []:
-            langs = [l.get("key", "") for l in e.get("languages") or []]
-            if langs and f"/languages/{LANG3}" not in langs:
-                continue
-            for cid in (e.get("covers") or [])[:1]:
-                if cid and cid > 0:
-                    label = " · ".join(x for x in [(e.get("publishers") or [""])[0], (re.findall(r"\d{4}", e.get("publish_date") or "") or [""])[0]] if x)
-                    add(f"{OL_COVERS}/b/id/{cid}-L.jpg", f"{OL_COVERS}/b/id/{cid}-M.jpg", label or "Another edition")
-            if len(out) >= 30:
-                break
+    if not work_key:
+        return out
+    eds = http_json(f"{OL}{work_key}/editions.json?limit=300") or {}
+    others = []
+    for e in eds.get("entries") or []:
+        langs = [l.get("key", "") for l in e.get("languages") or []]
+        covers = [c for c in e.get("covers") or [] if c and c > 0]
+        if not covers or (langs and f"/languages/{LANG3}" not in langs):
+            continue
+        places = ", ".join(e.get("publish_places") or [])
+        uk = any(p in places.lower() for p in UK_PLACES)
+        isbn = next((i for i in map(isbn13, (e.get("isbn_13") or []) + (e.get("isbn_10") or [])) if i), None)
+        year = (re.findall(r"\d{4}", e.get("publish_date") or "") or [None])[0]
+        publisher = (e.get("publishers") or [None])[0]
+        others.append((not uk, not isbn, -(int(year) if year else 0), {
+            "url": f"{OL_COVERS}/b/id/{covers[0]}-L.jpg", "preview": f"{OL_COVERS}/b/id/{covers[0]}-M.jpg",
+            "label": " · ".join(x for x in (publisher, year, places.split(",")[0] if places else None) if x) or "Another edition",
+            "uk": uk, "edition": {"isbn": isbn, "title": e.get("title"), "subtitle": e.get("subtitle"), "publisher": publisher,
+                                  "year": year, "pages": e.get("number_of_pages"), "format": guess_format(e.get("physical_format"))}}))
+    for *_, o in sorted(others, key=lambda x: x[:3]):
+        if o["url"] not in seen and len(out) < 40:
+            seen.add(o["url"])
+            out.append(o)
     return out
 
 
@@ -723,9 +739,9 @@ def book_covers(book_id: int):
     with db() as c:
         r = get_book(c, book_id)
     LOOKUP_PROBLEMS.clear()
-    found = cover_choices(r)
+    found = edition_choices(r)
     if not found:
-        lookup_failed("find covers")
+        lookup_failed("find other editions")
     return found
 
 

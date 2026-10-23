@@ -339,3 +339,4 @@ details .grid-2 { margin-top: 10px; }
 .cover-choice { display: flex; flex-direction: column; gap: 6px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; }
 .cover-choice:hover .cover, .cover-choice.picked .cover { outline: 3px solid var(--accent); outline-offset: 2px; }
 .cover-choice:disabled { cursor: default; }
+.ribbon.uk { left: auto; right: -4px; background: #2c3e5c; color: #fff; }
