@@ -213,15 +213,33 @@ def http_get(url, timeout=12, accept="application/json"):
         return r.read()
 
 
+LOOKUP_PROBLEMS = []     # what went wrong talking to Google / Open Library, newest last
+
+
 def http_json(url, timeout=12):
+    """JSON from a book service, or None. A service being down, slow or refusing us
+    never breaks the app: the other one may still answer."""
     try:
         return json.loads(http_get(url, timeout))
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
-    except (urllib.error.URLError, TimeoutError, ValueError):
+        if e.code != 404:
+            problem = f"{urllib.parse.urlsplit(url).hostname} said {e.code} {e.reason}"
+            if e.code == 429 and "googleapis" in url:
+                problem += " (Google's daily limit; a free API key fixes this, see the README)"
+            LOOKUP_PROBLEMS.append(problem)
+            print("Lookup problem:", problem, url, flush=True)
         return None
+    except (OSError, ValueError) as e:     # no internet, DNS, timeouts, SSL, bad JSON
+        problem = f"couldn't reach {urllib.parse.urlsplit(url).hostname} ({e})"
+        LOOKUP_PROBLEMS.append(problem)
+        print("Lookup problem:", problem, flush=True)
+        return None
+
+
+def lookup_failed(what):
+    """Nothing found and a service misbehaved: say so instead of 'nothing found'."""
+    if LOOKUP_PROBLEMS:
+        raise HTTPException(503, f"Couldn't {what}: {LOOKUP_PROBLEMS[-1]}. Try again in a minute.")
 
 
 def strip_html(s):
@@ -487,7 +505,10 @@ def lookup(isbn: str):
         raise HTTPException(400, "That doesn't look like an ISBN. It's the 13-digit number under the barcode, starting 978 or 979.")
     with db() as c:
         have = [book_out(r) for r in c.execute("SELECT * FROM books WHERE isbn=?", (code,))]
+    LOOKUP_PROBLEMS.clear()
     info = lookup_isbn(code)
+    if not info:
+        lookup_failed("look that ISBN up")
     return {"isbn": code, "found": info, "have": have}
 
 
@@ -497,11 +518,14 @@ def search(q: str):
     if len(q) < 2:
         return []
     code = isbn13(q)
+    LOOKUP_PROBLEMS.clear()
     if code:
         info = lookup_isbn(code)
         results = [info] if info else []
     else:
         results = search_books(q)
+    if not results:
+        lookup_failed("search")
     with db() as c:
         have = {r["isbn"]: r["status"] for r in c.execute("SELECT isbn, status FROM books WHERE isbn IS NOT NULL")}
         titles = {(r["title"].lower(), r["status"]) for r in c.execute("SELECT title, status FROM books")}
