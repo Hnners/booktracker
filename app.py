@@ -64,6 +64,26 @@ def db():
     return conn
 
 
+def stacks_from_flat_books(c):
+    """Books laid flat with the old switch: each run of them on a shelf becomes a stack."""
+    rows = c.execute("""SELECT * FROM books WHERE bookcase_id IS NOT NULL AND stack_id IS NULL
+                        ORDER BY bookcase_id, shelf, shelf_pos""").fetchall()
+    if not any(r["flat"] for r in rows):
+        return
+    stack, last = None, None
+    for r in rows:
+        place = (r["bookcase_id"], r["shelf"])
+        if r["flat"]:
+            if stack is None or place != last:
+                stack = c.execute("INSERT INTO stacks (bookcase_id, shelf, shelf_pos) VALUES (?, ?, ?)",
+                                  (*place, r["shelf_pos"] or 0)).lastrowid
+            c.execute("UPDATE books SET stack_id=? WHERE id=?", (stack, r["id"]))
+        else:
+            stack = None
+        last = place
+    c.execute("UPDATE books SET flat=0")
+
+
 def setup():
     with db() as c:
         c.execute("PRAGMA journal_mode=WAL")
@@ -84,6 +104,11 @@ def setup():
                           ("flat", "INTEGER NOT NULL DEFAULT 0")):        # lying on its side; neighbours stack up
             if col not in cols:
                 c.execute(f"ALTER TABLE books ADD COLUMN {col} {kind}")
+        if "stack_id" not in cols:
+            c.execute("ALTER TABLE books ADD COLUMN stack_id INTEGER")     # in a stack: lying flat
+        c.execute("""CREATE TABLE IF NOT EXISTS stacks (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bookcase_id INTEGER NOT NULL, shelf INTEGER NOT NULL, shelf_pos REAL NOT NULL)""")
+        stacks_from_flat_books(c)
         c.execute("CREATE INDEX IF NOT EXISTS books_isbn ON books(isbn)")
         c.execute("CREATE INDEX IF NOT EXISTS books_place ON books(bookcase_id, shelf, shelf_pos)")
         c.execute("""CREATE TABLE IF NOT EXISTS bookcases (
@@ -600,7 +625,12 @@ def repair(c):
     c.execute(f"UPDATE books SET format='paperback' WHERE format IS NULL OR format NOT IN ({','.join('?' * len(FORMATS))})",
               tuple(FORMATS))
     c.execute("UPDATE books SET status='owned' WHERE status NOT IN ('owned', 'wishlist')")
-    c.execute("UPDATE books SET flat=0 WHERE flat != 0 AND bookcase_id IS NULL")
+    c.execute("""DELETE FROM stacks WHERE NOT EXISTS (SELECT 1 FROM bookcases k WHERE k.id = stacks.bookcase_id
+                 AND stacks.shelf < k.shelves AND stacks.shelf >= 0)""")
+    c.execute(f"UPDATE books SET {UNSHELVE} WHERE stack_id IS NOT NULL AND (status != 'owned' OR "
+              "NOT EXISTS (SELECT 1 FROM stacks s WHERE s.id = books.stack_id))")
+    c.execute("""UPDATE books SET bookcase_id = (SELECT bookcase_id FROM stacks s WHERE s.id = books.stack_id),
+                 shelf = (SELECT shelf FROM stacks s WHERE s.id = books.stack_id) WHERE stack_id IS NOT NULL""")
 
 
 @app.get("/api/books")
@@ -648,12 +678,10 @@ def search(q: str):
 
 EDITABLE = ("status", "title", "subtitle", "authors", "isbn", "publisher", "year", "pages", "format",
             "height_mm", "thickness_mm", "series", "series_no", "description", "read_status", "rating",
-            "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at", "flat")
+            "notes", "wish_priority", "wish_note", "loaned_to", "loaned_at")
 
 
 def clean(field, value):
-    if field == "flat" and value in ("", None, False, 0):
-        return 0
     if value in ("", None):
         return None
     if field == "authors":
@@ -664,8 +692,6 @@ def clean(field, value):
         return str(value)[:10]
     if field == "isbn":
         return isbn13(value) or re.sub(r"[^0-9Xx]", "", str(value)) or None
-    if field == "flat":
-        return 1 if str(value).lower() in ("1", "true", "yes") else 0
     if field in ("pages", "rating", "wish_priority"):
         return int(float(value))
     if field in ("height_mm", "thickness_mm", "series_no"):
@@ -680,8 +706,13 @@ def clean(field, value):
 
 
 def end_of_shelf(c, case_id, shelf):
-    r = c.execute("SELECT MAX(shelf_pos) FROM books WHERE bookcase_id=? AND shelf=?", (case_id, shelf)).fetchone()
+    r = c.execute("""SELECT MAX(p) FROM (SELECT shelf_pos p FROM books WHERE bookcase_id=? AND shelf=? AND stack_id IS NULL
+                     UNION ALL SELECT shelf_pos FROM stacks WHERE bookcase_id=? AND shelf=?)""",
+                  (case_id, shelf, case_id, shelf)).fetchone()
     return (r[0] or 0) + 1
+
+
+UNSHELVE = "bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, stack_id=NULL"
 
 
 @app.post("/api/books")
@@ -728,17 +759,17 @@ def edit_book(book_id: int, body: dict):
         get_book(c, book_id)
         fields = {k: clean(k, v) for k, v in body.items() if k in EDITABLE}
         if fields.get("status") == "wishlist":
-            fields.update(bookcase_id=None, shelf=None, shelf_pos=None, loaned_to=None, loaned_at=None)
+            fields.update(bookcase_id=None, shelf=None, shelf_pos=None, stack_id=None, loaned_to=None, loaned_at=None)
         if fields:
             fields["updated_at"] = now()
             c.execute(f"UPDATE books SET {', '.join(k + '=?' for k in fields)} WHERE id=?", (*fields.values(), book_id))
         if "place" in body:          # {"bookcase_id": 1, "shelf": 0} or null to take it off the shelves
             p = body["place"]
             if p and p.get("bookcase_id") is not None:
-                c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=? WHERE id=?",
+                c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, stack_id=NULL WHERE id=?",
                           (int(p["bookcase_id"]), int(p["shelf"]), end_of_shelf(c, p["bookcase_id"], p["shelf"]), book_id))
             else:
-                c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE id=?", (book_id,))
+                c.execute(f"UPDATE books SET {UNSHELVE} WHERE id=?", (book_id,))
         return book_out(get_book(c, book_id))
 
 
@@ -890,8 +921,8 @@ def edit_bookcase(case_id: int, body: dict):
         if v:
             c.execute(f"UPDATE bookcases SET {', '.join(k + '=?' for k in v)} WHERE id=?", (*v.values(), case_id))
         if "shelves" in v:     # fewer shelves: books on the removed ones go back to "to shelve"
-            c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id=? AND shelf>=?",
-                      (case_id, v["shelves"]))
+            c.execute(f"UPDATE books SET {UNSHELVE} WHERE bookcase_id=? AND shelf>=?", (case_id, v["shelves"]))
+            c.execute("DELETE FROM stacks WHERE bookcase_id=? AND shelf>=?", (case_id, v["shelves"]))
         r = c.execute("SELECT * FROM bookcases WHERE id=?", (case_id,)).fetchone()
         if not r:
             raise HTTPException(404, "No such bookcase")
@@ -901,25 +932,74 @@ def edit_bookcase(case_id: int, body: dict):
 @app.delete("/api/bookcases/{case_id}")
 def delete_bookcase(case_id: int):
     with db() as c:
-        c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id=?", (case_id,))
+        c.execute(f"UPDATE books SET {UNSHELVE} WHERE bookcase_id=?", (case_id,))
+        c.execute("DELETE FROM stacks WHERE bookcase_id=?", (case_id,))
         c.execute("DELETE FROM bookcases WHERE id=?", (case_id,))
     return {"ok": True}
 
 
 @app.post("/api/arrange")
 def arrange(body: dict):
-    """Save the order of books on shelves after dragging. body: {"lists": [{"bookcase_id": 1,
-    "shelf": 0, "ids": [5, 3, 9]}, {"bookcase_id": null, "ids": [...]}]}"""
+    """Save the order of books and stacks after dragging.
+    body: {"lists": [{"bookcase_id": 1, "shelf": 0, "items": [5, "s3", 9]}, {"bookcase_id": null, "items": [...]}],
+           "stacks": {"3": [7, 8]}}   - a stack's books, bottom first"""
     with db() as c:
         for lst in body.get("lists") or []:
             case_id, shelf = lst.get("bookcase_id"), lst.get("shelf")
-            flat = {int(x) for x in lst.get("flat") or []}
-            for i, book_id in enumerate(lst.get("ids") or []):
-                if case_id is None:
-                    c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE id=?", (book_id,))
+            for i, item in enumerate(lst.get("items") or []):
+                if isinstance(item, str) and item.startswith("s"):
+                    if case_id is not None:
+                        c.execute("UPDATE stacks SET bookcase_id=?, shelf=?, shelf_pos=? WHERE id=?",
+                                  (int(case_id), int(shelf), i + 1, int(item[1:])))
+                elif case_id is None:
+                    c.execute(f"UPDATE books SET {UNSHELVE} WHERE id=?", (int(item),))
                 else:
-                    c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, flat=?, status='owned' WHERE id=?",
-                              (int(case_id), int(shelf), i + 1, int(int(book_id) in flat), int(book_id)))
+                    c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, stack_id=NULL, status='owned' WHERE id=?",
+                              (int(case_id), int(shelf), i + 1, int(item)))
+        for stack_id, ids in (body.get("stacks") or {}).items():
+            st = c.execute("SELECT * FROM stacks WHERE id=?", (int(stack_id),)).fetchone()
+            if not st:
+                continue
+            for i, book_id in enumerate(ids):
+                c.execute("UPDATE books SET bookcase_id=?, shelf=?, shelf_pos=?, stack_id=?, status='owned' WHERE id=?",
+                          (st["bookcase_id"], st["shelf"], i + 1, st["id"], int(book_id)))
+    return {"ok": True}
+
+
+@app.get("/api/stacks")
+def stacks():
+    with db() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM stacks ORDER BY id")]
+
+
+@app.post("/api/stacks")
+def add_stack(body: dict):
+    """A new, empty stack at the start of a shelf (always in view, even on a full shelf),
+    ready for books to be dragged in."""
+    case_id, shelf = int(body.get("bookcase_id")), int(body.get("shelf"))
+    with db() as c:
+        case = c.execute("SELECT * FROM bookcases WHERE id=?", (case_id,)).fetchone()
+        if not case or not 0 <= shelf < case["shelves"]:
+            raise HTTPException(404, "No such shelf")
+        first = c.execute("""SELECT MIN(p) FROM (SELECT shelf_pos p FROM books WHERE bookcase_id=? AND shelf=? AND stack_id IS NULL
+                             UNION ALL SELECT shelf_pos FROM stacks WHERE bookcase_id=? AND shelf=?)""",
+                          (case_id, shelf, case_id, shelf)).fetchone()[0]
+        cur = c.execute("INSERT INTO stacks (bookcase_id, shelf, shelf_pos) VALUES (?, ?, ?)",
+                        (case_id, shelf, (first if first is not None else 1) - 1))
+        return dict(c.execute("SELECT * FROM stacks WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+@app.delete("/api/stacks/{stack_id}")
+def delete_stack(stack_id: int):
+    """Take a stack away: its books stand up where it was, bottom book first."""
+    with db() as c:
+        st = c.execute("SELECT * FROM stacks WHERE id=?", (stack_id,)).fetchone()
+        if not st:
+            return {"ok": True}
+        books = c.execute("SELECT id FROM books WHERE stack_id=? ORDER BY shelf_pos", (stack_id,)).fetchall()
+        for i, r in enumerate(books):
+            c.execute("UPDATE books SET stack_id=NULL, shelf_pos=? WHERE id=?", (st["shelf_pos"] + i / (len(books) + 1), r["id"]))
+        c.execute("DELETE FROM stacks WHERE id=?", (stack_id,))
     return {"ok": True}
 
 
@@ -931,16 +1011,13 @@ def hue_key(b):
     return (0 if s > .18 and .12 < l < .9 else 1, round(h * 12) % 12 if s > .18 else l, l)
 
 
-def shelf_width(rows):
-    """mm of shelf a row of books takes: upright books their thickness, a stack its longest book."""
-    total, stack = 0.0, 0.0
-    for r in rows:
-        if r["flat"]:
-            stack = max(stack, dims(r)[0])
-        else:
-            total += stack + dims(r)[1]
-            stack = 0.0
-    return total + stack
+def shelf_width(c, case_id, shelf):
+    """mm of a shelf in use: upright books their thickness, each stack its longest book."""
+    total = sum(dims(r)[1] for r in c.execute(
+        "SELECT * FROM books WHERE bookcase_id=? AND shelf=? AND stack_id IS NULL", (case_id, shelf)))
+    for st in c.execute("SELECT id FROM stacks WHERE bookcase_id=? AND shelf=?", (case_id, shelf)).fetchall():
+        total += max([dims(r)[0] for r in c.execute("SELECT * FROM books WHERE stack_id=?", (st["id"],))] or [0])
+    return total
 
 
 ORDERS = {
@@ -968,14 +1045,14 @@ def fill_bookcase(case_id: int, body: dict):
         count = [0] * case["shelves"]
         if body.get("source") == "case":
             books = c.execute("SELECT * FROM books WHERE bookcase_id=?", (case_id,)).fetchall()
-            c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL, flat=0 WHERE bookcase_id=?", (case_id,))
+            c.execute(f"UPDATE books SET {UNSHELVE} WHERE bookcase_id=?", (case_id,))
+            c.execute("DELETE FROM stacks WHERE bookcase_id=?", (case_id,))
         else:
             books = c.execute(f"SELECT * FROM books WHERE status='owned' AND bookcase_id IS NULL AND "
                               "1=1").fetchall()
             for s in range(case["shelves"]):
-                rows = c.execute("SELECT * FROM books WHERE bookcase_id=? AND shelf=? ORDER BY shelf_pos", (case_id, s)).fetchall()
-                used[s] = shelf_width(rows)
-                count[s] = max([int(r["shelf_pos"] or 0) for r in rows] or [0])
+                used[s] = shelf_width(c, case_id, s)
+                count[s] = int(end_of_shelf(c, case_id, s)) - 1
         placed, shelf = 0, 0
         for b in sorted(books, key=order):
             t = dims(b)[1]

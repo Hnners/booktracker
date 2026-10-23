@@ -73,9 +73,9 @@ function loadScript(src) {
 }
 
 // ---------------------------------------------------------------- the library in memory
-let BOOKS = [], CASES = [], SERIES = {};
+let BOOKS = [], CASES = [], SERIES = {}, STACKS = [];
 async function loadAll() {
-  [BOOKS, CASES, SERIES] = await Promise.all([api("/books"), api("/bookcases"), api("/series-info")]);
+  [BOOKS, CASES, SERIES, STACKS] = await Promise.all([api("/books"), api("/bookcases"), api("/series-info"), api("/stacks")]);
 }
 const bookById = (id) => BOOKS.find((b) => b.id === +id);
 const caseById = (id) => CASES.find((c) => c.id === +id);
@@ -266,8 +266,11 @@ VIEWS.bookcases = function (p) {
   // A stack's grip (the tab on top) moves the whole stack.
   for (const el of view.querySelectorAll(".shelf-books, .tray-books, .stack")) {
     const isStack = el.classList.contains("stack");
-    sortables.push(new Sortable(el, { group: "books", animation: 150, delay: 220, delayOnTouchOnly: true,
-      draggable: isStack ? ".spine" : ".spine, .stack", filter: isStack ? ".stack-grip" : null, preventOnFilter: false,
+    const isTray = el.classList.contains("tray-books");
+    sortables.push(new Sortable(el, { animation: 150, delay: 220, delayOnTouchOnly: true,
+      // stacks only go on shelves, never into the tray or another stack
+      group: { name: "books", put: isStack || isTray ? (_to, _from, item) => item.classList.contains("spine") : true },
+      draggable: isStack ? ".spine" : ".spine, .stack", filter: isStack ? ".stack-top, .stack-hint" : ".stack-x", preventOnFilter: false,
       ghostClass: "spine-ghost", chosenClass: "spine-chosen",
       onEnd: (e) => { if (e.from !== e.to || e.oldIndex !== e.newIndex) saveOrder(e.from, e.to); } }));
   }
@@ -292,28 +295,29 @@ function highlight(q) {
   }
   if (first) first.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
 }
-// A shelf's books in order, with each run of books lying flat grouped into a stack (bottom first)
-function shelfItems(books) {
-  const items = [];
-  for (const b of books) {
-    if (b.flat) { const last = items[items.length - 1]; if (Array.isArray(last)) last.push(b); else items.push([b]); }
-    else items.push(b);
-  }
-  return items;
-}
 function caseEl(c, scale, mine) {
   const onCase = mine.filter((b) => b.bookcase_id === c.id);
   const shelves = [];
   for (let s = 0; s < c.shelves; s++) {
-    const books = onCase.filter((b) => b.shelf === s).sort((a, b) => (a.shelf_pos || 0) - (b.shelf_pos || 0));
-    const items = shelfItems(books);
-    const used = items.reduce((t, it) => t + (Array.isArray(it) ? Math.max(...it.map((b) => b.height)) : it.thickness), 0);
+    // upright books and stacks, in shelf order; a stack's books lie flat, bottom first
+    const items = [
+      ...onCase.filter((b) => b.shelf === s && !b.stack_id).map((b) => ({ pos: b.shelf_pos || 0, book: b })),
+      ...STACKS.filter((k) => k.bookcase_id === c.id && k.shelf === s).map((k) => ({ pos: k.shelf_pos, stack: k,
+        books: mine.filter((b) => b.stack_id === k.id).sort((a, b) => (a.shelf_pos || 0) - (b.shelf_pos || 0)) })),
+    ].sort((a, b) => a.pos - b.pos);
+    const used = items.reduce((t, it) => t + (it.book ? it.book.thickness : Math.max(0, ...it.books.map((b) => b.height))), 0);
     const over = used > c.width_cm * 10;
     shelves.push(h("div", { class: "shelf" + (over ? " over" : ""), style: `height:${(c.shelf_height_cm * 10 * scale).toFixed(0)}px` },
-      h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, items.map((it) => Array.isArray(it)
-        ? h("div", { class: "stack" }, it.map((b) => spineEl(b, scale, true)),
-            h("span", { class: "stack-grip", title: "Drag here to move the whole stack", "aria-hidden": "true" }))
-        : spineEl(it, scale)))),
+      h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, items.map((it) => it.book ? spineEl(it.book, scale) :
+        h("div", { class: "stack" + (it.books.length ? "" : " stack-empty"), "data-stack": it.stack.id, style: `--w:${(140 * scale).toFixed(0)}px` },
+          it.books.map((b) => spineEl(b, scale, true)),
+          h("div", { class: "stack-top" },
+            h("span", { class: "stack-grip", title: "Drag to move the whole stack" }),
+            h("button", { class: "stack-x", type: "button", title: it.books.length ? "Remove the stack (its books stand up)" : "Remove this stack",
+              "aria-label": "Remove stack", onclick: (e) => { e.stopPropagation(); removeStack(it.stack.id); } }, "×")),
+          it.books.length ? null : h("span", { class: "stack-hint" }, "Drag books here")))),
+      h("button", { class: "make-stack", type: "button", title: "Add a stack to this shelf, then drag books into it",
+        onclick: () => makeStack(c.id, s) }, "+ Stack")),
       h("div", { class: "plank" }, h("span", { class: "fill", title: "Used shelf space" },
         over ? `Over by ${((used - c.width_cm * 10) / 10).toFixed(0)} cm` : `${Math.round(used / 10)} of ${c.width_cm} cm`)));
   }
@@ -325,22 +329,38 @@ function caseEl(c, scale, mine) {
         h("button", { class: "btn quiet", type: "button", onclick: () => editCase(c) }, "Edit"))),
     h("div", { class: "case-frame", style: `width:${(c.width_cm * 10 * scale + 28).toFixed(0)}px` }, shelves));
 }
+async function makeStack(caseId, shelf) {
+  try { STACKS.push(await api("/stacks", { method: "POST", body: { bookcase_id: caseId, shelf } })); rerender();
+    toast("Stack added at the start of the shelf. Drag books into it, or drag it along by its tab."); } catch (e) { fail(e); }
+}
+async function removeStack(id) {
+  try { await api(`/stacks/${id}`, { method: "DELETE" }); await loadAll(); rerender(); } catch (e) { fail(e); }
+}
 async function saveOrder(from, to) {
   const roots = [...new Set([from, to].map((el) => el.closest(".shelf-books, .tray-books")))];
+  const stacks = {};
   const lists = roots.map((el) => {
-    const ids = [], flat = [];
-    for (const kid of el.children) {
-      if (kid.classList.contains("spine")) ids.push(+kid.dataset.id);
-      else if (kid.classList.contains("stack")) for (const sp of kid.querySelectorAll(".spine")) { ids.push(+sp.dataset.id); flat.push(+sp.dataset.id); }
-    }
     const caseId = el.dataset.case === "" ? null : +el.dataset.case;
     const shelf = caseId == null ? null : +el.dataset.shelf;
-    ids.forEach((id, i) => Object.assign(bookById(id), { bookcase_id: caseId, shelf, shelf_pos: caseId == null ? null : i + 1,
-      flat: caseId != null && flat.includes(id) ? 1 : 0 }));
-    return { bookcase_id: caseId, shelf, ids, flat: caseId == null ? [] : flat };
+    const items = [];
+    [...el.children].forEach((kid, i) => {
+      if (kid.classList.contains("spine")) {
+        items.push(+kid.dataset.id);
+        Object.assign(bookById(kid.dataset.id), { bookcase_id: caseId, shelf, shelf_pos: caseId == null ? null : items.length, stack_id: null });
+      } else if (kid.classList.contains("stack")) {
+        const k = STACKS.find((x) => x.id === +kid.dataset.stack);
+        items.push("s" + k.id);
+        Object.assign(k, { bookcase_id: caseId, shelf, shelf_pos: items.length });
+        stacks[k.id] = [...kid.querySelectorAll(".spine")].map((sp, j) => {
+          Object.assign(bookById(sp.dataset.id), { bookcase_id: caseId, shelf, shelf_pos: j + 1, stack_id: k.id });
+          return +sp.dataset.id;
+        });
+      }
+    });
+    return { bookcase_id: caseId, shelf, items };
   });
   try {
-    await api("/arrange", { method: "POST", body: { lists } });
+    await api("/arrange", { method: "POST", body: { lists, stacks } });
   } catch (e) { fail(e); await loadAll(); }
   if (current === "bookcases") rerender();
 }
@@ -413,7 +433,7 @@ function arrangeDialog(c) {
     h("label", { class: "field" }, "Bookcase", target),
     h("label", { class: "field" }, "What to arrange", source),
     h("label", { class: "field" }, "Order", order),
-    h("p", { class: "muted small" }, "Books fill each shelf from the top until it's full, using each book's thickness. Re-sorting stands any stacked books upright. You can drag any of them afterwards."),
+    h("p", { class: "muted small" }, "Books fill each shelf from the top until it's full, using each book's thickness. Re-sorting takes away this bookcase's stacks and stands their books upright. You can drag any of them afterwards."),
     h("div", { class: "row end" }, h("button", { class: "btn primary", type: "submit" }, "Arrange"))));
 }
 
@@ -899,18 +919,10 @@ function openBook(id, seed) {
   const syncLoan = () => { loanDetail.hidden = !loanOn.checked; if (loanOn.checked) setTimeout(() => loanTo.focus(), 0); };
   loanOn.addEventListener("change", syncLoan);
   loanDetail.hidden = !loanOn.checked;
-  const flatOn = h("input", { type: "checkbox", checked: !!b.flat, role: "switch" });
-  const flatBox = h("div", { class: "loan-box" },
-    h("label", { class: "check toggle" }, flatOn, h("span", {}, h("strong", {}, "Lying flat"),
-      h("span", { class: "muted small" }, " · on its side in a stack; books lying flat next to each other stack up"))));
-  const syncFlat = () => { flatBox.hidden = !placeSel.value; };
-  placeSel.addEventListener("change", syncFlat);
-  syncFlat();
   const gather = () => {
     const body = { read_status: readStatus, rating: rating || null };
     for (const [k, el] of Object.entries(f)) body[k] = el.value.trim ? el.value.trim() : el.value;
     if (b.status !== "wishlist") { delete body.wish_priority; delete body.wish_note; }
-    if (b.status === "owned") body.flat = placeSel.value && flatOn.checked ? 1 : 0;
     if (b.status === "owned") { body.loaned_at = loanOn.checked ? (loanAt.value || today()) : ""; body.loaned_to = loanOn.checked ? loanTo.value.trim() : ""; }
     return body;
   };
@@ -986,7 +998,6 @@ function openBook(id, seed) {
         b.status === "owned" ? h("div", { class: "grid-2" }, field("Where it lives", placeSel), field("Format", f.format)) :
           h("div", { class: "grid-2" }, field("How much we want it", f.wish_priority), field("Format", f.format)),
         b.status === "wishlist" ? field("Wishlist note", f.wish_note) : null,
-        b.status === "owned" ? flatBox : null,
         b.status === "owned" ? h("div", { class: "loan-box" + (b.loaned_at ? " on" : "") },
           h("label", { class: "check toggle" }, loanOn, h("span", {}, h("strong", {}, "On loan"), h("span", { class: "muted small" }, " · still shown on its shelf, faded"))),
           loanDetail, loanNames) : null,

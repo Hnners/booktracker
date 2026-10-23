@@ -362,11 +362,22 @@ details .grid-2 { margin-top: 10px; }
 .title-link:hover { text-decoration: underline; }
 @media (max-width: 520px) { .loan-row { grid-template-columns: 44px 1fr; } .loan-row .thumb { width: 44px; } .loan-row .got { grid-column: 1 / -1; } }
 
-/* ---------- books lying flat, in stacks */
-.stack { position: relative; flex: none; display: flex; flex-direction: column-reverse; align-items: flex-start; align-self: flex-end; padding-top: 10px; min-width: 24px; margin: 0 1px; }
-.stack-grip { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 28px; height: 7px; border-radius: 99px; background: rgba(255,255,255,.45); cursor: grab; opacity: 0; transition: opacity .15s; }
-.case:hover .stack-grip, .stack:focus-within .stack-grip { opacity: 1; }
-@media (hover: none) { .stack-grip { opacity: .7; } }
+/* ---------- stacks: books lying flat */
+.shelf { position: relative; }
+.stack { position: relative; flex: none; display: flex; flex-direction: column-reverse; align-items: flex-start; align-self: flex-end; padding-top: 12px; margin: 0 2px; min-width: 24px; }
+.stack.stack-empty { width: var(--w); min-height: 46px; padding: 14px 6px 6px; justify-content: center; align-items: center; border: 2px dashed rgba(255,255,255,.5); border-bottom: 0; border-radius: 6px 6px 0 0; }
+.wood-white .stack.stack-empty, .wood-pine .stack.stack-empty { border-color: rgba(60,40,20,.35); }
+.stack-hint { font-size: 11px; line-height: 1.2; color: rgba(255,255,255,.85); text-align: center; pointer-events: none; }
+.wood-white .stack-hint, .wood-pine .stack-hint { color: rgba(60,40,20,.7); }
+.stack-top { position: absolute; top: 0; left: 0; right: 0; height: 12px; display: flex; justify-content: center; align-items: center; }
+.stack-grip { width: 30px; height: 7px; border-radius: 99px; background: rgba(255,255,255,.55); cursor: grab; }
+.stack-x { position: absolute; right: -6px; top: -8px; width: 22px; height: 22px; border-radius: 50%; border: 0; padding: 0;
+  background: rgba(20,12,6,.75); color: #fff; font-size: 14px; line-height: 22px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.stack:hover .stack-x, .stack.stack-empty .stack-x { opacity: 1; }
+.make-stack { position: absolute; top: 6px; right: 6px; z-index: 3; border: 0; border-radius: 99px; padding: 3px 10px; font-size: 12px; font-weight: 700;
+  background: rgba(255,255,255,.88); color: #2A2420; cursor: pointer; opacity: 0; transition: opacity .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.shelf:hover .make-stack, .make-stack:focus-visible { opacity: 1; }
+@media (hover: none) { .stack-grip { opacity: .8; } .stack-x { opacity: .85; } .make-stack { opacity: .85; } }
 .spine.flat { border-radius: 0 2px 2px 0; box-shadow: inset 0 2px 2px -1px rgba(255,255,255,.28), inset 0 -2px 3px -1px rgba(0,0,0,.35), inset 0 0 0 1px rgba(40,25,10,.22); }
 .spine.flat:hover { transform: translateX(5px); }
 .spine.flat.found { transform: translateX(8px); }
@@ -375,4 +386,3 @@ details .grid-2 { margin-top: 10px; }
 .spine.flat.look-1::before { left: 3%; } .spine.flat.look-1::after { left: auto; right: 3%; }
 .spine.flat.look-2 .spine-author { padding: .15em .5em; }
 .spine.flat.look-3 { background-image: linear-gradient(90deg, transparent 4%, var(--acc) 4% 4.6%, transparent 4.6% 5.6%, var(--acc) 5.6% 6.2%, transparent 6.2% 93.8%, var(--acc) 93.8% 94.4%, transparent 94.4% 95.4%, var(--acc) 95.4% 96%, transparent 96%); }
-.spine.flat.photo img { object-fit: cover; }
