@@ -50,9 +50,8 @@ FORMATS = {
     "large-paperback": ("Large paperback", 234),
     "mass-market": ("Mass-market paperback", 178),
     "hardback": ("Hardback", 240),
-    "ebook": ("eBook", 0),
-    "audiobook": ("Audiobook", 0),
-}
+}                                           # printed books only: eBooks and audiobooks aren't logged
+DIGITAL = ("ebook", "audiobook")
 SHELVABLE = ("paperback", "large-paperback", "mass-market", "hardback")
 
 app = FastAPI(title="Book Tracker")
@@ -258,7 +257,7 @@ def from_openlibrary(isbn):
     if not out["pages"]:
         m = re.search(r"(\d+)\s*p", ed.get("pagination") or "")
         out["pages"] = int(m.group(1)) if m else None
-    out["format"] = guess_format(ed.get("physical_format"))
+    out["format"] = f if (f := guess_format(ed.get("physical_format"))) in FORMATS else None
     work = None
     author_keys = [a.get("key") for a in ed.get("authors") or [] if a.get("key")]
     if ed.get("works"):
@@ -453,7 +452,7 @@ def edition_choices(r):
             "uk": uk, "edition": {"isbn": isbn, "title": e.get("title"), "subtitle": e.get("subtitle"), "publisher": publisher,
                                   "year": year, "pages": e.get("number_of_pages"),
                                   # never turn a book you hold into an eBook just by borrowing a cover
-                                  "format": f if (f := guess_format(e.get("physical_format"))) in SHELVABLE else None}}))
+                                  "format": f if (f := guess_format(e.get("physical_format"))) in FORMATS else None}}))
     for *_, o in sorted(others, key=lambda x: x[:3]):
         if o["url"] not in seen and len(out) < 40:
             seen.add(o["url"])
@@ -945,7 +944,7 @@ def fill_bookcase(case_id: int, body: dict):
             c.execute("UPDATE books SET bookcase_id=NULL, shelf=NULL, shelf_pos=NULL WHERE bookcase_id=?", (case_id,))
         else:
             books = c.execute(f"SELECT * FROM books WHERE status='owned' AND bookcase_id IS NULL AND "
-                              "format NOT IN ('ebook', 'audiobook')").fetchall()
+                              "1=1").fetchall()
             for r in c.execute("SELECT * FROM books WHERE bookcase_id=?", (case_id,)):
                 if r["shelf"] is not None and r["shelf"] < case["shelves"]:
                     used[r["shelf"]] += dims(r)[1]
@@ -1056,6 +1055,9 @@ async def import_csv(file: UploadFile = File(...), to_read: str = Form("wishlist
         have_title = {(r["title"].lower(), r["status"]) for r in c.execute("SELECT title, status FROM books")}
         for row in rows:
             b = goodreads_row(row, to_read) if goodreads else dict(row)
+            if b and b.get("format") in DIGITAL:      # Kindle and audio editions aren't logged
+                skipped += 1
+                continue
             if not b or not (b.get("title") or "").strip():
                 skipped += 1
                 continue

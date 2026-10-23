@@ -88,8 +88,8 @@ const owned = () => BOOKS.filter((b) => b.status === "owned");
 const wished = () => BOOKS.filter((b) => b.status === "wishlist");
 
 const FORMATS = { "paperback": "Paperback", "large-paperback": "Large paperback", "mass-market": "Mass-market paperback",
-  "hardback": "Hardback", "ebook": "eBook", "audiobook": "Audiobook" };
-const SHELVABLE = { has: (f) => f !== "ebook" && f !== "audiobook" };     // anything you can put on a shelf
+  "hardback": "Hardback" };      // printed books only
+const SHELVABLE = { has: () => true };     // every book here is a printed one
 const READ = { unread: "Not read yet", reading: "Reading", read: "Read" };
 const PRIORITY = { 1: "Really want", 2: "Would like", 3: "Some day" };
 const WOODS = { oak: "Oak", walnut: "Walnut", pine: "Pine", white: "White", black: "Black", grey: "Grey" };
@@ -108,7 +108,6 @@ const seriesText = (b) => b.series ? `${b.series}${b.series_no != null ? " #" + 
 const fmtNo = (n) => Number.isInteger(+n) ? String(+n) : String(+n);
 function placeText(b) {
   if (b.status === "wishlist") return "On the wishlist";
-  if (!SHELVABLE.has(b.format)) return `${FORMATS[b.format]} (not on a shelf)`;
   const c = b.bookcase_id != null && caseById(b.bookcase_id);
   return c ? `${c.name} · shelf ${b.shelf + 1}` : "To shelve";
 }
@@ -218,7 +217,6 @@ VIEWS.bookcases = function (p) {
   const mine = owned();
   const tray = mine.filter((b) => b.bookcase_id == null && SHELVABLE.has(b.format)).sort(SORTS.added);
   const shelved = mine.filter((b) => b.bookcase_id != null);
-  const digital = mine.filter((b) => !SHELVABLE.has(b.format)).length;   // not drawn on shelves
   const zoom = store.get("zoom", 1);
   const avail = Math.min(view.clientWidth || 360, 1320) - 48;
   // Two bookcases side by side on anything wider than a phone. Every bookcase is drawn at
@@ -234,7 +232,7 @@ VIEWS.bookcases = function (p) {
     onclick: () => { store.set("zoom", Math.max(.5, Math.min(2.5, +(zoom * d).toFixed(2)))); rerender(); } }, d > 1 ? "+" : "−");
 
   const parts = [pageHead("Our bookcases",
-    [stat(shelved.length, "on the shelves"), stat(tray.length, "to shelve"), digital ? stat(digital, "eBooks & audio") : null,
+    [stat(shelved.length, "on the shelves"), stat(tray.length, "to shelve"),
       stat(CASES.length, CASES.length === 1 ? "bookcase" : "bookcases")],
     h("button", { class: "btn primary", type: "button", onclick: () => editCase() }, "+ Bookcase"))];
   if (!CASES.length) {
@@ -254,10 +252,7 @@ VIEWS.bookcases = function (p) {
   parts.push(h("section", { class: "tray" },
     h("div", { class: "tray-head" },
       h("div", {}, h("h2", {}, "To shelve"),
-        h("p", { class: "muted" }, tray.length ? "Drag these onto a shelf, or let the app shelve them for you." : "Nothing waiting. New books land here until they're put on a shelf."),
-        digital ? h("p", { class: "muted small" }, "Not on the shelves because they're set as eBooks or audiobooks (tap one to change its format): ",
-          mine.filter((b) => !SHELVABLE.has(b.format)).map((b, i) => [i ? ", " : "",
-            h("button", { class: "linkish", type: "button", onclick: () => openBook(b.id) }, `${b.title} (${FORMATS[b.format]})`)])) : null),
+        h("p", { class: "muted" }, tray.length ? "Drag these onto a shelf, or let the app shelve them for you." : "Nothing waiting. New books land here until they're put on a shelf.")),
       tray.length && CASES.length ? h("button", { class: "btn", type: "button", onclick: () => arrangeDialog(null) }, "Shelve them for me…") : null),
     trayBox));
   setView(...parts);
@@ -402,7 +397,7 @@ VIEWS.library = function () {
   const read = mine.filter((b) => b.read_status === "read").length;
   const q = h("input", { type: "search", value: st.q, placeholder: "Search title, author, series, ISBN", "aria-label": "Search the library" });
   const show = h("select", { "aria-label": "Show" }, Object.entries({ all: "All our books", unread: "Not read yet", reading: "Reading now",
-    read: "Read", unshelved: "To shelve", digital: "eBooks & audiobooks", nocover: "Missing a cover" }).map(([v, l]) => h("option", { value: v }, l)));
+    read: "Read", unshelved: "To shelve", nocover: "Missing a cover" }).map(([v, l]) => h("option", { value: v }, l)));
   const sort = h("select", { "aria-label": "Sort" }, Object.entries({ author: "Author", title: "Title", added: "Recently added", series: "Series" })
     .map(([v, l]) => h("option", { value: v }, l)));
   show.value = st.show; sort.value = st.sort;
@@ -412,7 +407,7 @@ VIEWS.library = function () {
     store.set("lib", { q: q.value, show: show.value, sort: sort.value });
     const tests = { all: () => true, unread: (b) => b.read_status === "unread", reading: (b) => b.read_status === "reading",
       read: (b) => b.read_status === "read", unshelved: (b) => SHELVABLE.has(b.format) && b.bookcase_id == null,
-      digital: (b) => !SHELVABLE.has(b.format), nocover: (b) => !b.cover_url };
+      nocover: (b) => !b.cover_url };
     const list = mine.filter((b) => tests[show.value](b) && matches(b, q.value.trim())).sort(SORTS[sort.value]);
     grid.replaceChildren(...list.map((b) => bookTile(b, sort.value === "series" && b.series ? seriesText(b) : authorsText(b))));
     count.textContent = list.length === mine.length ? "" : `Showing ${list.length} of ${mine.length}`;
