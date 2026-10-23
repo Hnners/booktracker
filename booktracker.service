@@ -1,0 +1,13 @@
+[Unit]
+Description=Book Tracker web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=henry
+WorkingDirectory=/opt/booktracker
+ExecStart=/opt/booktracker/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

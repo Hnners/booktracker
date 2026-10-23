@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Book Tracker</title>
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
+<meta name="theme-color" content="#2E3B30">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Books">
+<link rel="icon" type="image/png" href="/static/icons/favicon.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#bookcases"><span class="brand-mark" aria-hidden="true"></span>Book Tracker</a>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#bookcases" data-tab="bookcases">Bookcases</a>
+    <a href="#library" data-tab="library">Library</a>
+    <a href="#authors" data-tab="authors">Authors</a>
+    <a href="#series" data-tab="series">Series</a>
+    <a href="#wishlist" data-tab="wishlist">Wishlist</a>
+    <a href="#add" data-tab="add" class="tab-add">+ Add books</a>
+    <a href="#more" data-tab="more">More</a>
+  </nav>
+</header>
+<main id="view" tabindex="-1"></main>
+<dialog id="modal"><div id="modal-body"></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/static/vendor/Sortable.min.js"></script>
+<script src="/static/app.js"></script>
+<script>
+  // lets phones offer "Install app" / "Add to Home Screen" (needs the https:// address)
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+</script>
+</body>
+</html>
