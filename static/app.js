@@ -884,6 +884,7 @@ function openBook(id, seed) {
       h("div", { class: "book-pics" },
         coverBox,
         isNew ? h("p", { class: "muted small" }, "You can add a cover photo once it's saved.") : h("div", { class: "row tools" },
+          h("button", { class: "btn small", type: "button", onclick: () => chooseCover(b) }, "Choose cover"),
           h("button", { class: "btn small", type: "button", onclick: async () => upload(`/books/${b.id}/cover`, await pickFile("image/*", "environment")) }, "Cover photo"),
           b.isbn ? h("button", { class: "btn small quiet", type: "button", onclick: async (e) => {
             e.currentTarget.disabled = true;
@@ -912,6 +913,25 @@ function openBook(id, seed) {
   modal.classList.add("wide");
   modal.addEventListener("close", () => modal.classList.remove("wide"), { once: true });
   if (isNew) setTimeout(() => f.title.focus(), 50);
+}
+
+// Pick a cover from this ISBN's and other English editions' covers
+async function chooseCover(b) {
+  const grid = h("div", { class: "cover-choices" }, h("p", { class: "muted loading" }, "Finding covers…"));
+  openModal(h("div", { class: "modal-head" }, h("div", {}, h("h2", {}, "Choose a cover"),
+    h("p", { class: "muted" }, b.title)), h("button", { class: "btn quiet close", type: "button", "aria-label": "Back", onclick: () => openBook(b.id) }, "✕")), grid);
+  try {
+    const list = await api(`/books/${b.id}/covers`);
+    grid.replaceChildren(...list.map((c) => h("button", { class: "cover-choice", type: "button", onclick: async (e) => {
+      grid.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      e.currentTarget.classList.add("picked");
+      const fd = new FormData(); fd.append("url", c.url);
+      try { upsert(await api(`/books/${b.id}/cover`, { method: "POST", body: fd })); toast("Cover changed"); openBook(b.id); rerender(); }
+      catch (err) { fail(err); grid.querySelectorAll("button").forEach((x) => (x.disabled = false)); }
+    } }, h("div", { class: "cover" }, h("img", { src: c.preview, alt: "", loading: "lazy", onerror: (e) => e.target.closest("button").remove() })),
+      h("span", { class: "tile-sub" }, c.label))));
+    if (!list.length) grid.replaceChildren(h("p", { class: "muted" }, "No other covers found. You can take a photo of the cover instead."));
+  } catch (err) { grid.replaceChildren(h("p", { class: "error" }, err.message)); }
 }
 
 // ---------------------------------------------------------------- More: bookcases, import, export

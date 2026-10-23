@@ -358,13 +358,19 @@ def lookup_isbn(isbn):
     return out
 
 
+LANG = os.environ.get("BOOK_LANGUAGE", "en")         # two letters: whose editions and covers to prefer
+LANG3 = {"en": "eng", "fr": "fre", "de": "ger", "es": "spa", "it": "ita", "nl": "dut"}.get(LANG, "eng")
+
+
 def search_books(q):
-    """Find books by title / author / anything, newest-edition-agnostic. Each result
-    has an ISBN when the source gave one, so adding it can look up the full details."""
+    """Find books by title / author / anything, English editions only, so the ISBN and
+    cover that come back are for a copy you could actually have on your shelf."""
     results, seen = [], set()
-    data = http_json(f"{GB}/volumes?q={urllib.parse.quote(q)}&maxResults=20&printType=books"
+    data = http_json(f"{GB}/volumes?q={urllib.parse.quote(q)}&maxResults=20&printType=books&langRestrict={LANG}"
                      + (f"&key={GB_KEY}" if GB_KEY else "")) or {}
     for v in data.get("items") or []:
+        if (v.get("volumeInfo", {}).get("language") or LANG) != LANG:
+            continue
         b = gb_item(v)
         if not b.get("title"):
             continue
@@ -375,20 +381,66 @@ def search_books(q):
         b["cover_preview"] = b["cover_urls"][-1] if b["cover_urls"] else None
         b["source"] = "Google Books"
         results.append(b)
-    data = http_json(f"{OL}/search.json?q={urllib.parse.quote(q)}&limit=12"
-                     "&fields=key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median") or {}
+    # Open Library: ask for the best matching English edition of each work, not the work's
+    # first ISBN and cover, which can be any language.
+    data = http_json(f"{OL}/search.json?q={urllib.parse.quote(q + ' language:' + LANG3)}&lang={LANG}&limit=12"
+                     "&fields=key,title,author_name,first_publish_year,number_of_pages_median,"
+                     "editions,editions.key,editions.title,editions.isbn,editions.cover_i,editions.language") or {}
     for d in data.get("docs") or []:
-        isbns = [i for i in (isbn13(x) for x in d.get("isbn") or []) if i]
+        ed = ((d.get("editions") or {}).get("docs") or [{}])[0]
+        if ed and LANG3 not in (ed.get("language") or [LANG3]):
+            continue
+        isbns = [i for i in (isbn13(x) for x in ed.get("isbn") or []) if i]
         isbn = isbns[0] if isbns else None
-        title, authors = d.get("title"), [tidy_name(a) for a in d.get("author_name") or []][:3]
+        title, authors = ed.get("title") or d.get("title"), [tidy_name(a) for a in d.get("author_name") or []][:3]
         if not title or (isbn and isbn in seen) or (title.lower(), tuple(authors[:1])) in seen:
             continue
         seen.update({isbn, (title.lower(), tuple(authors[:1]))})
-        cover = f"{OL_COVERS}/b/id/{d['cover_i']}-L.jpg" if d.get("cover_i") else None
+        cover = f"{OL_COVERS}/b/id/{ed['cover_i']}-L.jpg" if ed.get("cover_i") else None
         results.append({"isbn": isbn, "title": title, "authors": authors, "year": str(d.get("first_publish_year") or "") or None,
                         "pages": d.get("number_of_pages_median"), "cover_urls": [cover] if cover else [],
                         "cover_preview": cover.replace("-L.", "-M.") if cover else None, "source": "Open Library"})
     return results[:24]
+
+
+def cover_choices(r):
+    """Covers to choose from for a book: this ISBN's own (Google, Open Library), then
+    covers of the other English editions of the same book."""
+    out, seen = [], set()
+
+    def add(url, preview, label):
+        if url and url not in seen:
+            seen.add(url)
+            out.append({"url": url, "preview": preview or url, "label": label})
+
+    work_key = None
+    if r["isbn"]:
+        g = from_google(r["isbn"])
+        if g.get("cover_urls"):
+            add(g["cover_urls"][0], g["cover_urls"][-1], "Google Books, this ISBN")
+        ed = http_json(f"{OL}/isbn/{r['isbn']}.json") or {}
+        for cid in ed.get("covers") or []:
+            if cid and cid > 0:
+                add(f"{OL_COVERS}/b/id/{cid}-L.jpg", f"{OL_COVERS}/b/id/{cid}-M.jpg", "Open Library, this ISBN")
+        if ed.get("works"):
+            work_key = ed["works"][0]["key"]
+    if not work_key:
+        author = (json.loads(r["authors"] or "[]") or [""])[0]
+        hit = http_json(f"{OL}/search.json?q={urllib.parse.quote(r['title'] + ' ' + author)}&lang={LANG}&limit=1&fields=key") or {}
+        work_key = ((hit.get("docs") or [{}])[0]).get("key")
+    if work_key:
+        eds = http_json(f"{OL}{work_key}/editions.json?limit=200") or {}
+        for e in eds.get("entries") or []:
+            langs = [l.get("key", "") for l in e.get("languages") or []]
+            if langs and f"/languages/{LANG3}" not in langs:
+                continue
+            for cid in (e.get("covers") or [])[:1]:
+                if cid and cid > 0:
+                    label = " · ".join(x for x in [(e.get("publishers") or [""])[0], (re.findall(r"\d{4}", e.get("publish_date") or "") or [""])[0]] if x)
+                    add(f"{OL_COVERS}/b/id/{cid}-L.jpg", f"{OL_COVERS}/b/id/{cid}-M.jpg", label or "Another edition")
+            if len(out) >= 30:
+                break
+    return out
 
 
 # ---------------------------------------------------------------- covers and spines
@@ -664,6 +716,17 @@ def delete_book(book_id: int):
     remove_file(COVERS, r["cover"])
     remove_file(SPINES, r["spine_photo"])
     return {"ok": True}
+
+
+@app.get("/api/books/{book_id}/covers")
+def book_covers(book_id: int):
+    with db() as c:
+        r = get_book(c, book_id)
+    LOOKUP_PROBLEMS.clear()
+    found = cover_choices(r)
+    if not found:
+        lookup_failed("find covers")
+    return found
 
 
 @app.post("/api/books/{book_id}/refresh")

@@ -333,3 +333,9 @@ details .grid-2 { margin-top: 10px; }
   #modal-body { padding: 16px; }
   .sticky-actions { bottom: -16px; }
 }
+
+/* ---------- cover chooser */
+.cover-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 16px 12px; max-height: 70dvh; overflow: auto; padding: 4px; }
+.cover-choice { display: flex; flex-direction: column; gap: 6px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; }
+.cover-choice:hover .cover, .cover-choice.picked .cover { outline: 3px solid var(--accent); outline-offset: 2px; }
+.cover-choice:disabled { cursor: default; }
