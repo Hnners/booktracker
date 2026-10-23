@@ -136,24 +136,23 @@ function lum(hex) {
 const inkFor = (bg) => lum(bg) > .32 ? "#1d1a17" : "#f7f2e8";
 const spineBg = (b) => b.spine_colour || CLOTH[hashCode(b.title) % CLOTH.length];
 
-function spineEl(b, scale, flat = false) {
-  // Upright: as wide as the book is thick. Lying flat: as wide as the book is tall.
-  const w = flat ? b.height * scale : Math.max(5, b.thickness * scale);
-  const ht = flat ? Math.max(5, b.thickness * scale) : b.height * scale;
+function spineEl(b, scale) {
+  // Drawn upright (as wide as the book is thick). Inside a closed stack, CSS lays it on its side
+  // using the same sizes, so a book changes as soon as it's dragged into or out of a stack.
+  const w = Math.max(5, b.thickness * scale), ht = b.height * scale;
   const bg = spineBg(b), ink = inkFor(bg);
   const acc = b.spine_accent && Math.abs(lum(b.spine_accent) - lum(bg)) > .08 ? b.spine_accent : ink;
   const el = h("button", {
-    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}${flat ? " flat" : ""}`,
+    class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}`,
     type: "button", "data-id": b.id, title: `${b.title} — ${authorsText(b)}${b.loaned_at ? ` (on loan${b.loaned_to ? " to " + b.loaned_to : ""})` : ""}`,
-    style: `width:${w.toFixed(1)}px;height:${ht.toFixed(1)}px;--bg:${bg};--ink:${ink};--acc:${acc};--acc-ink:${inkFor(acc)}`,
+    style: `--uw:${w.toFixed(1)}px;--uh:${ht.toFixed(1)}px;--bg:${bg};--ink:${ink};--acc:${acc};--acc-ink:${inkFor(acc)}`,
   });
-  if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false",
-    style: flat ? `position:absolute;width:${ht.toFixed(1)}px;height:${w.toFixed(1)}px;left:${((w - ht) / 2).toFixed(1)}px;top:${((ht - w) / 2).toFixed(1)}px;transform:rotate(-90deg)` : null }));
-  else if (flat ? ht >= 10 : w >= 10) {
-    const fs = flat ? Math.max(6.5, Math.min(14, ht * .42, w / 16)) : Math.max(6.5, Math.min(14, w * .42, ht / 16));
+  if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false" }));
+  else if (w >= 10) {
+    const fs = Math.max(6.5, Math.min(14, w * .42, ht / 16));
     el.append(h("span", { class: "spine-text", style: `font-size:${fs.toFixed(1)}px` },
       h("span", { class: "spine-title" }, b.title),
-      b.authors[0] && (flat ? w : ht) > 90 ? h("span", { class: "spine-author" }, nameParts(b.authors[0]).last) : null));
+      b.authors[0] && ht > 90 ? h("span", { class: "spine-author" }, nameParts(b.authors[0]).last) : null));
   }
   el.setAttribute("aria-label", `${b.title} by ${authorsText(b)}`);
   return el;
@@ -268,11 +267,16 @@ VIEWS.bookcases = function (p) {
     const isStack = el.classList.contains("stack");
     const isTray = el.classList.contains("tray-books");
     sortables.push(new Sortable(el, { animation: 150, delay: 220, delayOnTouchOnly: true,
+      forceFallback: true, fallbackOnBody: true, fallbackTolerance: 4, swapThreshold: .6,
+      onStart: (e) => { DRAG.on = true; DRAG.item = e.item; },
       // stacks only go on shelves, never into the tray or another stack
       group: { name: "books", put: isStack || isTray ? (_to, _from, item) => item.classList.contains("spine") : true },
       draggable: isStack ? ".spine" : ".spine, .stack", filter: isStack ? ".stack-top, .stack-hint" : ".stack-x", preventOnFilter: false,
       ghostClass: "spine-ghost", chosenClass: "spine-chosen",
-      onEnd: (e) => { if (e.from !== e.to || e.oldIndex !== e.newIndex) saveOrder(e.from, e.to); } }));
+      onEnd: (e) => {
+        DRAG.on = false; openStack(null);
+        if (e.from !== e.to || e.oldIndex !== e.newIndex) saveOrder(e.from, e.to);
+      } }));
   }
   const focus = p.get("find");
   if (focus) {
@@ -280,6 +284,29 @@ VIEWS.bookcases = function (p) {
     if (s) { s.classList.add("found"); setTimeout(() => s.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }), 80); }
   }
 };
+// While a book is being dragged, the stack under the pointer stands its books up in a row
+// (bottom of the stack on the left) so you can drop the book exactly where it should go.
+// It lies back down when the pointer leaves it or the book is dropped.
+const DRAG = { on: false, item: null, open: null };
+function openStack(st) {
+  if (DRAG.open === st) return;
+  DRAG.open?.classList.remove("open");
+  DRAG.open = st;
+  st?.classList.add("open");
+}
+function trackDrag(e) {
+  if (!DRAG.on || DRAG.item?.classList.contains("stack")) return;
+  const p = e.touches ? e.touches[0] : e;
+  if (!p) return;
+  const st = document.elementFromPoint(p.clientX, p.clientY)?.closest?.(".stack");
+  if (st) return openStack(st);
+  if (DRAG.open) {
+    const r = DRAG.open.getBoundingClientRect();
+    if (p.clientX < r.left - 14 || p.clientX > r.right + 14 || p.clientY < r.top - 40 || p.clientY > r.bottom + 14) openStack(null);
+  }
+}
+document.addEventListener("mousemove", trackDrag, { passive: true });
+document.addEventListener("touchmove", trackDrag, { passive: true });
 function spineClick(e) {
   const s = e.target.closest(".spine");
   if (s) openBook(+s.dataset.id);
@@ -310,7 +337,7 @@ function caseEl(c, scale, mine) {
     shelves.push(h("div", { class: "shelf" + (over ? " over" : ""), style: `height:${(c.shelf_height_cm * 10 * scale).toFixed(0)}px` },
       h("div", { class: "shelf-books", "data-case": c.id, "data-shelf": s }, items.map((it) => it.book ? spineEl(it.book, scale) :
         h("div", { class: "stack" + (it.books.length ? "" : " stack-empty"), "data-stack": it.stack.id, style: `--w:${(140 * scale).toFixed(0)}px` },
-          it.books.map((b) => spineEl(b, scale, true)),
+          it.books.map((b) => spineEl(b, scale)),
           h("div", { class: "stack-top" },
             h("span", { class: "stack-grip", title: "Drag to move the whole stack" }),
             h("button", { class: "stack-x", type: "button", title: it.books.length ? "Remove the stack (its books stand up)" : "Remove this stack",
