@@ -131,6 +131,25 @@ now = lambda: datetime.now().isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------- small helpers
+def isbn10(code13):
+    """ISBN-13 starting 978 as ISBN-10 (979 numbers have no ISBN-10)."""
+    if not code13 or not code13.startswith("978") or len(code13) != 13:
+        return None
+    core = code13[3:12]
+    check = (11 - sum((10 - i) * int(d) for i, d in enumerate(core)) % 11) % 11
+    return core + ("X" if check == 10 else str(check))
+
+
+AMAZON_IMG = os.environ.get("AMAZON_IMAGES_URL", "https://images-na.ssl-images-amazon.com/images/P")
+
+
+def amazon_cover(code13, size="L"):
+    """Amazon's published cover image for an ISBN (a 1-pixel blank when it has none, which
+    save_image turns down). Covers far more UK paperbacks than the free book databases."""
+    i10 = isbn10(code13)
+    return f"{AMAZON_IMG}/{i10}.01.{size}ZZZZZZZ.jpg" if i10 else None
+
+
 def isbn13(raw):
     """Any ISBN-10 or ISBN-13 (with or without dashes) as ISBN-13, or None."""
     s = re.sub(r"[^0-9Xx]", "", str(raw or "")).upper()
@@ -395,9 +414,11 @@ def lookup_isbn(isbn):
         t, s, n = split_title_series(out["title"])
         if s:
             out["title"], out["series"], out["series_no"] = t, s, n
-    out["cover_urls"] = (o.get("cover_urls") or []) + (g.get("cover_urls") or []) + \
-        [f"{OL_COVERS}/b/isbn/{isbn}-L.jpg?default=false"]
-    out["cover_preview"] = out["cover_urls"][0] if out["cover_urls"] else None
+    # Amazon first: real front covers, UK editions included. Open Library next, Google last
+    # (Google sometimes gives a scan of the title page instead of the cover).
+    out["cover_urls"] = [u for u in [amazon_cover(isbn)] + (o.get("cover_urls") or []) + (g.get("cover_urls") or []) +
+                         [f"{OL_COVERS}/b/isbn/{isbn}-L.jpg?default=false"] if u]
+    out["cover_preview"] = amazon_cover(isbn, "M") or (out["cover_urls"][0] if out["cover_urls"] else None)
     out["full"] = True        # everything we could find; adding it needn't look it up again
     return out
 
@@ -465,6 +486,7 @@ def edition_choices(r):
     work_key = None
     if r["isbn"]:
         g = from_google(r["isbn"])
+        add(amazon_cover(r["isbn"]), amazon_cover(r["isbn"], "M"), label="This ISBN (Amazon)", current=True)
         if g.get("cover_urls"):
             add(g["cover_urls"][0], g["cover_urls"][-1], label="This ISBN (Google Books)", current=True)
         ed = http_json(f"{OL}/isbn/{r['isbn']}.json") or {}
@@ -512,7 +534,14 @@ def edition_choices(r):
         if (v.get("volumeInfo", {}).get("language") or LANG) != LANG:
             continue
         g = gb_item(v)
-        if not g.get("cover_urls") or g.get("isbn") == r["isbn"] or not norm_title(g.get("title")).startswith(want[:25]):
+        if g.get("isbn") == r["isbn"] or not norm_title(g.get("title")).startswith(want[:25]):
+            continue
+        if g.get("isbn"):
+            add(amazon_cover(g["isbn"]), amazon_cover(g["isbn"], "M"),
+                label=" · ".join(x for x in (g.get("publisher"), g.get("year"), "Amazon") if x),
+                edition={"isbn": g.get("isbn"), "title": g.get("title"), "subtitle": g.get("subtitle"),
+                         "publisher": g.get("publisher"), "year": g.get("year"), "pages": g.get("pages")})
+        if not g.get("cover_urls"):
             continue
         add(g["cover_urls"][0], g["cover_urls"][-1],
             label=" · ".join(x for x in (g.get("publisher"), g.get("year"), "Google Books") if x),

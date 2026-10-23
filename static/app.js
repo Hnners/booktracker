@@ -902,7 +902,9 @@ VIEWS.add = function (p) {
     const have = r.have || haveIsbn(r.isbn)?.status;
     const known = haveIsbn(r.isbn);
     return h("div", { class: "result" },
-      r.cover_preview ? h("div", { class: "thumb" }, h("img", { src: r.cover_preview, alt: "", loading: "lazy", onerror: (e) => e.target.parentNode.classList.add("none") })) : h("div", { class: "thumb none" }),
+      r.cover_preview ? h("div", { class: "thumb" }, h("img", { src: r.cover_preview, alt: "", loading: "lazy",
+        onerror: (e) => e.target.parentNode.classList.add("none"),
+        onload: (e) => { if (e.target.naturalWidth < 60) e.target.parentNode.classList.add("none"); } })) : h("div", { class: "thumb none" }),
       h("div", { class: "result-body" },
         h("strong", {}, r.title, r.subtitle ? h("span", { class: "muted" }, `: ${r.subtitle}`) : null),
         h("div", { class: "muted small" }, [(r.authors || []).join(" & ") || "Unknown author", r.publisher, r.year, r.series ? seriesText(r) : null, r.pages ? `${r.pages} pages` : null].filter(Boolean).join(" · ")),
@@ -1225,7 +1227,9 @@ async function chooseCover(b) {
   try {
     const list = await api(`/books/${b.id}/covers`);
     grid.replaceChildren(...list.map((c) => h("button", { class: "cover-choice", type: "button", onclick: (e) => pick(c, e.currentTarget) },
-      h("div", { class: "cover" }, h("img", { src: c.preview, alt: "", loading: "lazy", onerror: (e) => e.target.closest("button").remove() }),
+      h("div", { class: "cover" }, h("img", { src: c.preview, alt: "", loading: "lazy", onerror: (e) => e.target.closest("button")?.remove(),
+        // a blank 1-pixel image means that source has no cover: don't offer it
+        onload: (e) => { if (e.target.naturalWidth < 60) e.target.closest("button")?.remove(); } }),
         c.uk ? h("span", { class: "ribbon uk" }, "UK") : null),
       c.edition?.title && c.edition.title.toLowerCase() !== b.title.toLowerCase() ? h("span", { class: "tile-title" }, c.edition.title) : null,
       h("span", { class: "tile-sub" }, c.label))));
