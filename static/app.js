@@ -144,7 +144,7 @@ function spineEl(b, scale) {
   const acc = b.spine_accent && Math.abs(lum(b.spine_accent) - lum(bg)) > .08 ? b.spine_accent : ink;
   const el = h("button", {
     class: `spine look-${b.id % 4}${b.format === "hardback" ? " hard" : ""}${b.spine_url ? " photo" : ""}${b.loaned_at ? " loaned" : ""}`,
-    type: "button", "data-id": b.id, title: `${b.title} — ${authorsText(b)}${b.loaned_at ? ` (on loan${b.loaned_to ? " to " + b.loaned_to : ""})` : ""}`,
+    type: "button", "data-id": b.id,
     style: `--uw:${w.toFixed(1)}px;--uh:${ht.toFixed(1)}px;--bg:${bg};--ink:${ink};--acc:${acc};--acc-ink:${inkFor(acc)}`,
   });
   if (b.spine_url) el.append(h("img", { src: b.spine_url, alt: "", loading: "lazy", draggable: "false" }));
@@ -363,6 +363,43 @@ function shelfDock(row) {
   row.addEventListener("pointerleave", reset);
   row.addEventListener("pointerdown", reset);      // picking a book up: stop magnifying
 }
+
+// ----- A bubble under the book you're pointing at, with its full title and author (spines get cut short)
+const bubble = h("div", { class: "spine-bubble", role: "tooltip", "aria-hidden": "true" });
+document.body.append(bubble);
+let bubbleFor = null, bubbleFrame = 0;
+function placeBubble() {
+  bubbleFrame = 0;
+  if (!bubbleFor || !bubbleFor.isConnected) return hideBubble();
+  const r = bubbleFor.getBoundingClientRect();
+  const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+  const left = Math.min(window.innerWidth - bw - 8, Math.max(8, r.left + r.width / 2 - bw / 2));
+  let top = r.bottom + 10;
+  if (top + bh > window.innerHeight - 8) top = r.top - bh - 10;          // no room below: show it above
+  bubble.style.transform = `translate(${left.toFixed(0)}px, ${top.toFixed(0)}px)`;
+  bubble.style.setProperty("--arrow", `${(r.left + r.width / 2 - left).toFixed(0)}px`);
+  bubble.classList.toggle("above", top < r.top);
+}
+function hideBubble() { bubbleFor = null; bubble.classList.remove("show"); }
+document.addEventListener("pointermove", (e) => {
+  if (e.pointerType !== "mouse" || DRAG.on) return hideBubble();
+  const sp = e.target.closest && e.target.closest(".wall .spine, .tray .spine");
+  if (!sp) return bubbleFor && hideBubble();
+  if (sp !== bubbleFor) {
+    const b = bookById(sp.dataset.id);
+    if (!b) return hideBubble();
+    bubbleFor = sp;
+    bubble.replaceChildren(...[h("strong", {}, b.title), b.subtitle ? h("span", { class: "sub" }, b.subtitle) : null,
+      h("span", {}, authorsText(b)), b.series ? h("span", { class: "muted" }, seriesText(b)) : null,
+      b.loaned_at ? h("span", { class: "loan" }, `On loan${b.loaned_to ? " to " + b.loaned_to : ""}`) : null].filter(Boolean));
+    bubble.classList.add("show");
+  }
+  // follow the book as the shelf magnifies around it
+  cancelAnimationFrame(bubbleFrame);
+  bubbleFrame = requestAnimationFrame(() => { bubbleFrame = requestAnimationFrame(placeBubble); });
+}, { passive: true });
+window.addEventListener("scroll", hideBubble, { passive: true });
+document.addEventListener("pointerdown", hideBubble);
 
 function spineClick(e) {
   const s = e.target.closest(".spine");
