@@ -477,9 +477,7 @@ def edition_choices(r):
         author = (json.loads(r["authors"] or "[]") or [""])[0]
         hit = http_json(f"{OL}/search.json?q={urllib.parse.quote(r['title'] + ' ' + author)}&lang={LANG}&limit=1&fields=key") or {}
         work_key = ((hit.get("docs") or [{}])[0]).get("key")
-    if not work_key:
-        return out
-    eds = http_json(f"{OL}{work_key}/editions.json?limit=300") or {}
+    eds = http_json(f"{OL}{work_key}/editions.json?limit=300") or {} if work_key else {}
     others = []
     for e in eds.get("entries") or []:
         langs = [l.get("key", "") for l in e.get("languages") or []]
@@ -502,6 +500,26 @@ def edition_choices(r):
         if o["url"] not in seen and len(out) < 40:
             seen.add(o["url"])
             out.append(o)
+    # then other English editions Google Books knows, found by title and author
+    author = (json.loads(r["authors"] or "[]") or [""])[0]
+    surname = author.split()[-1] if author.split() else ""
+    title = r["title"]
+    query = f"intitle:{title} inauthor:{surname}" if surname else title
+    data = http_json(f"{GB}/volumes?q={urllib.parse.quote(query)}"
+                     f"&maxResults=30&printType=books&langRestrict={LANG}" + (f"&key={GB_KEY}" if GB_KEY else "")) or {}
+    want = norm_title(r["title"])
+    for v in data.get("items") or []:
+        if (v.get("volumeInfo", {}).get("language") or LANG) != LANG:
+            continue
+        g = gb_item(v)
+        if not g.get("cover_urls") or g.get("isbn") == r["isbn"] or not norm_title(g.get("title")).startswith(want[:25]):
+            continue
+        add(g["cover_urls"][0], g["cover_urls"][-1],
+            label=" · ".join(x for x in (g.get("publisher"), g.get("year"), "Google Books") if x),
+            edition={"isbn": g.get("isbn"), "title": g.get("title"), "subtitle": g.get("subtitle"), "publisher": g.get("publisher"),
+                     "year": g.get("year"), "pages": g.get("pages")})
+        if len(out) >= 40:
+            break
     return out
 
 
