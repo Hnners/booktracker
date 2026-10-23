@@ -192,7 +192,18 @@ async function rerender() {
   await route();
   window.scrollTo(0, y);
 }
-window.addEventListener("hashchange", () => { stopScanner(); route(); });
+// Always show the latest: books added on another phone or tab appear when you change page
+// or come back to the app.
+let lastLoad = Date.now();
+async function fresh() {
+  if (Date.now() - lastLoad < 2000) return;
+  try { await loadAll(); lastLoad = Date.now(); } catch {}
+}
+window.addEventListener("hashchange", async () => { stopScanner(); await fresh(); route(); });
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible" || modal.open || document.querySelector(".sortable-chosen")) return;
+  await fresh(); rerender();
+});
 const pageHead = (title, sub, ...actions) =>
   h("div", { class: "head" }, h("div", {}, h("h1", {}, title), sub ? h("div", { class: "stats" }, sub) : null),
     actions.length ? h("div", { class: "row" }, actions) : null);

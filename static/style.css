@@ -180,7 +180,7 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6
 .spine {
   position: relative; flex: none; padding: 0; margin: 0 0 0 0; border: 0; cursor: pointer;
   background: var(--bg); color: var(--ink); border-radius: 1.5px 1.5px 0 0; overflow: hidden;
-  box-shadow: inset 2px 0 2px -1px rgba(255,255,255,.28), inset -2px 0 3px -1px rgba(0,0,0,.35);
+  box-shadow: inset 2px 0 2px -1px rgba(255,255,255,.28), inset -2px 0 3px -1px rgba(0,0,0,.35), inset 0 0 0 1px rgba(40,25,10,.22);
   transition: transform .15s ease, opacity .2s, filter .2s;
   -webkit-touch-callout: none; user-select: none;
 }
@@ -210,8 +210,9 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6
 .tray { margin-top: 36px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 0; }
 .tray-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 10px; margin-bottom: 12px; }
 .tray-books {
+  background-color: color-mix(in srgb, var(--line) 55%, var(--surface));
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 1px; min-height: 90px; padding: 10px 6px 0;
-  background: linear-gradient(transparent calc(100% - 12px), var(--line) calc(100% - 12px)); border-radius: 0 0 6px 6px;
+  background-image: linear-gradient(transparent calc(100% - 12px), var(--line) calc(100% - 12px)); border-radius: 0 0 6px 6px;
   padding-bottom: 12px; margin: 0 -18px; padding-left: 18px; padding-right: 18px;
 }
 
