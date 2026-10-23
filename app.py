@@ -315,10 +315,14 @@ def from_openlibrary(isbn):
 
 def series_from_other_editions(work_key):
     """Many editions don't list their series, but other editions of the same book do.
-    Take the series most of them agree on (preferring ones that give a number)."""
-    data = http_json(f"{OL}{work_key}/editions.json?limit=100") or {}
+    Only English editions get a say (a translation's series is called something else), a name
+    already in your library wins, and otherwise the one most editions agree on (with a number)."""
+    data = http_json(f"{OL}{work_key}/editions.json?limit=200") or {}
     votes = {}
     for e in data.get("entries") or []:
+        langs = [l.get("key", "") for l in e.get("languages") or []]
+        if langs and f"/languages/{LANG3}" not in langs:
+            continue
         for s in e.get("series") or []:
             name, no = parse_series(s if isinstance(s, str) else s.get("name", ""))
             if name and len(name) < 80:
@@ -329,10 +333,13 @@ def series_from_other_editions(work_key):
     by_name = {}
     for (name, no), n in votes.items():
         by_name.setdefault(name.lower(), []).append((n, name, no))
-    best = max(by_name.values(), key=lambda v: sum(x[0] for x in v))
+    with db() as c:
+        mine = {r[0].lower(): r[0] for r in c.execute("SELECT DISTINCT series FROM books WHERE series IS NOT NULL")}
+    known = [v for k, v in by_name.items() if k in mine]
+    best = max(known or by_name.values(), key=lambda v: sum(x[0] for x in v))
     numbered = [x for x in best if x[2] is not None]
     n, name, no = max(numbered or best)
-    return name, no
+    return mine.get(name.lower(), name), no
 
 
 def gb_item(v):
@@ -1096,7 +1103,10 @@ def rename_series(body: dict):
         raise HTTPException(400, "Need the old and new names")
     with db() as c:
         c.execute("UPDATE books SET series=? WHERE series=? COLLATE NOCASE", (new, old))
-        c.execute("UPDATE series_info SET name=? WHERE name=?", (new, old))
+        if c.execute("SELECT 1 FROM series_info WHERE name=?", (new,)).fetchone():
+            c.execute("DELETE FROM series_info WHERE name=? AND name != ?", (old, new))   # merging into a series you have
+        else:
+            c.execute("UPDATE series_info SET name=? WHERE name=?", (new, old))
     return {"ok": True}
 
 
