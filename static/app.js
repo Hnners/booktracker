@@ -612,7 +612,7 @@ VIEWS.add = function (p) {
   const add = async (data, status, btn) => {
     if (btn) btn.disabled = true;
     try {
-      const body = { ...data, ...target(), status, lookup: !!data.isbn && !data.cover_urls?.length && !data.series };
+      const body = { ...data, ...target(), status, lookup: !!data.isbn && !data.full };
       if (status !== "owned") { delete body.bookcase_id; delete body.shelf; }
       const b = upsert(await api("/books", { method: "POST", body }));
       recentlyAdded.unshift(b); showRecent();

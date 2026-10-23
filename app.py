@@ -278,8 +278,32 @@ def from_openlibrary(isbn):
         if name:
             out["series"], out["series_no"] = name, no
             break
+    if not out.get("series") and ed.get("works"):
+        out["series"], out["series_no"] = series_from_other_editions(ed["works"][0]["key"])
     out["cover_urls"] = [f"{OL_COVERS}/b/id/{cid}-L.jpg" for cid in ed.get("covers") or [] if cid and cid > 0][:2]
     return out
+
+
+def series_from_other_editions(work_key):
+    """Many editions don't list their series, but other editions of the same book do.
+    Take the series most of them agree on (preferring ones that give a number)."""
+    data = http_json(f"{OL}{work_key}/editions.json?limit=100") or {}
+    votes = {}
+    for e in data.get("entries") or []:
+        for s in e.get("series") or []:
+            name, no = parse_series(s if isinstance(s, str) else s.get("name", ""))
+            if name and len(name) < 80:
+                key = (name, no)
+                votes[key] = votes.get(key, 0) + (2 if no is not None else 1)
+    if not votes:
+        return None, None
+    by_name = {}
+    for (name, no), n in votes.items():
+        by_name.setdefault(name.lower(), []).append((n, name, no))
+    best = max(by_name.values(), key=lambda v: sum(x[0] for x in v))
+    numbered = [x for x in best if x[2] is not None]
+    n, name, no = max(numbered or best)
+    return name, no
 
 
 def gb_item(v):
@@ -330,6 +354,7 @@ def lookup_isbn(isbn):
     out["cover_urls"] = (o.get("cover_urls") or []) + (g.get("cover_urls") or []) + \
         [f"{OL_COVERS}/b/isbn/{isbn}-L.jpg?default=false"]
     out["cover_preview"] = out["cover_urls"][0] if out["cover_urls"] else None
+    out["full"] = True        # everything we could find; adding it needn't look it up again
     return out
 
 
