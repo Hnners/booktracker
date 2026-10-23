@@ -278,6 +278,7 @@ VIEWS.bookcases = function (p) {
         if (e.from !== e.to || e.oldIndex !== e.newIndex) saveOrder(e.from, e.to);
       } }));
   }
+  view.querySelectorAll(".shelf-books").forEach(shelfDock);
   const focus = p.get("find");
   if (focus) {
     const s = view.querySelector(`.spine[data-id="${focus}"]`);
@@ -307,6 +308,62 @@ function trackDrag(e) {
 }
 document.addEventListener("mousemove", trackDrag, { passive: true });
 document.addEventListener("touchmove", trackDrag, { passive: true });
+// ----- Shelves magnify under the mouse, like the macOS Dock (and Card Tracker's hand): the book
+// under the pointer grows, its neighbours a little, and the rest slide apart to make room. Mouse and
+// trackpad only; on touch screens the shelves stay still.
+const DOCK = window.matchMedia ? window.matchMedia("(hover: hover) and (pointer: fine)") : { matches: false };
+const DOCK_GROW = 0.5;          // the book under the pointer gets up to 50% bigger
+function shelfDock(row) {
+  if (!row || !DOCK.matches) return;
+  const items = [...row.children].filter((el) => el.classList.contains("spine") || el.classList.contains("stack"));
+  if (!items.length) return;
+  row.classList.add("dock");
+  let geo = null, x = 0, frame = 0;
+  const reset = () => {
+    geo = null; cancelAnimationFrame(frame);
+    items.forEach((el) => { el.style.transform = ""; el.style.zIndex = ""; });
+  };
+  const apply = () => {
+    frame = 0;
+    if (!geo) return;
+    const { centres, widths, heights, room, reach, left, right } = geo;
+    // stacks don't grow, they just make way; tall books never grow through the shelf above
+    const scales = items.map((el, i) => el.classList.contains("stack") ? 1
+      : 1 + Math.min(DOCK_GROW, room / heights[i] - 1) * Math.exp(-(((x - centres[i]) / reach) ** 2)));
+    const extra = scales.map((sc, i) => (sc - 1) * widths[i]);
+    const total = extra.reduce((a, b) => a + b, 0);
+    // which way the books spread depends on where the pointer is along the shelf, so the ends stay on it
+    const f = Math.min(1, Math.max(0, (x - left) / Math.max(1, right - left)));
+    let before = 0;
+    const shifts = items.map((el, i) => { const sh = before + extra[i] / 2 - total * f; before += extra[i]; return sh; });
+    // never past either end of the shelf
+    const lo = Math.min(...centres.map((c, i) => c + shifts[i] - widths[i] * scales[i] / 2)) - (geo.edgeL + 1);
+    const hi = Math.max(...centres.map((c, i) => c + shifts[i] + widths[i] * scales[i] / 2)) - (geo.edgeR - 1);
+    const nudge = lo < 0 ? -lo : hi > 0 ? -Math.min(hi, Math.max(0, lo)) : 0;
+    items.forEach((el, i) => {
+      const shift = shifts[i] + nudge;
+      el.style.transform = `translateX(${shift.toFixed(1)}px) scale(${scales[i].toFixed(3)})`;
+      el.style.zIndex = scales[i] > 1.01 ? String(Math.round(scales[i] * 100)) : "";
+    });
+  };
+  row.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || DRAG.on) { if (geo) reset(); return; }
+    if (!geo) {
+      const rects = items.map((el) => el.getBoundingClientRect());
+      const widths = rects.map((r) => r.width);
+      geo = { centres: rects.map((r) => r.left + r.width / 2), widths, heights: rects.map((r) => r.height),
+        room: row.closest(".shelf").clientHeight - 4, left: rects[0].left, right: rects[rects.length - 1].right,
+        edgeL: row.getBoundingClientRect().left, edgeR: row.getBoundingClientRect().right,
+        reach: (() => { const sw = widths.filter((w, i) => items[i].classList.contains("spine"));
+          return Math.max(30, 2.2 * (sw.length ? sw.reduce((a, b) => a + b, 0) / sw.length : 20)); })() };
+    }
+    x = e.clientX;
+    if (!frame) frame = requestAnimationFrame(apply);
+  });
+  row.addEventListener("pointerleave", reset);
+  row.addEventListener("pointerdown", reset);      // picking a book up: stop magnifying
+}
+
 function spineClick(e) {
   const s = e.target.closest(".spine");
   if (s) openBook(+s.dataset.id);

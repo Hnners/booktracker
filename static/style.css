@@ -399,3 +399,9 @@ details .grid-2 { margin-top: 10px; }
 .wood-white .stack.open::before, .wood-pine .stack.open::before { color: rgba(60,40,20,.7); }
 .stack.open .stack-top, .stack.open .stack-hint { display: none; }
 .sortable-fallback { opacity: .9 !important; z-index: 1000 !important; }
+
+/* ---------- shelves magnify under the mouse (see shelfDock) */
+@media (hover: hover) and (pointer: fine) {
+  .shelf-books.dock > .spine, .shelf-books.dock > .stack { transform-origin: 50% 100%; transition: transform .14s ease-out; will-change: transform; }
+  .shelf-books.dock > .spine:hover { transform: none; }
+}
