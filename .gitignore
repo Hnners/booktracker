@@ -1,9 +1,4 @@
-# Everything you've added lives on the server, never in git
-books.db
-books.db-wal
-books.db-shm
-covers/
-spines/
-venv/
 __pycache__/
 *.pyc
+.venv/
+data/

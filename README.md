@@ -1,61 +1,72 @@
-# Book Tracker
+# L.I.B.R.A.R.Y. – Lovingly Indexed Bookcases, Reads, Authors, Rows & Yarns
 
-A self-hosted home library: your books with their covers and spines, your bookcases drawn shelf by shelf,
-authors, series (with the gaps you're missing) and a wishlist. Built like Card Tracker: FastAPI + SQLite,
-plain JavaScript, installable on a phone. Runs as `booktracker.service` in the `booktracker` container at
-`/opt/booktracker`.
+A Home Assistant add-on for our home library: every book with its cover and spine, the bookcases
+drawn shelf by shelf, authors, series with the gaps you're missing, a wishlist and books on loan.
+It has its own sidebar panel, like M.A.S.H. and C.R.A.P.
 
-## Setting it up (once)
+![L.I.B.R.A.R.Y.](library/logo.png)
 
-1. In Proxmox, make a new LXC container from the Debian 12 template (1 CPU, 512 MB RAM and 8 GB disk is plenty)
-   and call it `booktracker`.
-2. In its console, as root:
+## Install
 
-   ```
-   apt update && apt install -y git
-   git clone https://github.com/Hnners/booktracker /opt/booktracker
-   /opt/booktracker/install.sh
-   ```
+1. In Home Assistant, go to **Settings → Add-ons → Add-on store**, open the **⋮** menu and choose
+   **Repositories**.
+2. Add `https://github.com/Hnners/booktracker` and close the dialog.
+3. Find **L.I.B.R.A.R.Y.** in the store, install it, turn on **Show in sidebar**, and start it.
 
-   It prints the address to open, e.g. `http://192.168.1.50:8000`.
-3. To reach it from outside and to use the **barcode scanner** (phones only allow the camera on `https://`),
-   add a public hostname to your existing Cloudflare Tunnel, e.g. `books.henners.org.uk` → `http://<container-ip>:8000`,
-   and add it to a Cloudflare Access application with your email one-time PIN policy, as you did for Card Tracker.
-   Include your wife's email in the policy.
-4. Open `https://books.henners.org.uk` on each phone and use "Add to Home Screen" / "Install app".
-
-## Updating
-
-```
-/opt/booktracker/update.sh
-```
-
-Pulls the latest code from GitHub and restarts. Your books (`books.db`), covers and spine photos are never in
-the repository and aren't touched.
+Anyone with a Home Assistant login can use it, from a browser or the HA companion app. Books,
+covers and spine photos live in the add-on's `/data`, so they're included in HA backups. You can also
+download a backup zip and a CSV from **More**.
 
 ## How it works
 
-- **Adding books**: scan barcodes with the phone camera (with "Keep scanning" on, each book is added in the
-  order you scan, straight onto the shelf you chose, so you can scan a shelf left to right), type an ISBN, or
-  search by title/author. Scanning a book you already have tells you where it is, handy in a shop.
-- **Details and covers** come from [Google Books](https://books.google.com) and [Open Library](https://openlibrary.org),
-  both free with no account. Open Library also knows most series. Covers are saved on the server.
-- **Spines**: there's no public source of spine pictures, so each spine is drawn from the cover's edge colour,
-  with the title and author, its thickness from the page count and height from the format. Take a photo of
-  the real spine on any book to use that instead.
-- **Bookcases** are drawn to scale from the shelf width you measure, so you can see when a shelf is full.
-  Drag spines between shelves (on a phone, hold a moment first), or use Arrange to fill shelves by author,
-  series, title, colour or height.
-- **Authors** and **Series** tabs group everything automatically. Set how many books a series has to see the
-  gaps; tap a gap to find it and put it on the wishlist.
-- **Import** a Goodreads export (series in titles like "Mort (Discworld, #4)" are picked up). Export to CSV, or
-  download a full backup zip (database and pictures) from More.
+- **Adding books**: scan barcodes with the phone camera. With "Keep scanning" on, each book is added
+  in the order you scan, straight onto the shelf you chose, so you can scan a shelf left to right.
+  You can also type an ISBN or search by title/author. Scanning a book you already have tells you where it is.
+- **Live scanning needs https.** Phones only allow the camera on `https://` addresses, so it works
+  when Home Assistant is opened over https (Nabu Casa, a Cloudflare tunnel, your own domain). On a
+  plain `http://` address, use **Photo of a barcode** in the scanner instead: take a photo and the
+  barcode is read from it.
+- **Details and covers** come from Google Books and Open Library, both free with no account.
+  Open Library and Wikidata also know most series.
+- **Spines** are drawn from the cover's edge colour, with the title and author. Their thickness
+  comes from the page count and their height from the format. You can photograph the real spine instead.
+- **Bookcases** are drawn to scale from the shelf width you measure. Drag spines between shelves (on a
+  phone, hold first), stack books flat, or use **Arrange** to fill shelves by author, series, title,
+  colour or height.
+- **Authors** and **Series** are grouped automatically. If you set how many books a series has, it
+  shows the gaps, and you can tap a gap to find that book and add it to the wishlist.
+- **Import** a Goodreads export (series in titles like "Mort (Discworld, #4)" are picked up).
+- **Home Assistant sensor**: `sensor.library_books` (books owned), with the wishlist, read, reading,
+  on loan and bookcase counts as attributes.
 
-Optional: set `GOOGLE_BOOKS_KEY` in the service file if you ever hit Google's daily lookup limit.
+## Options
 
-## Files
+| Option | Default | What it does |
+| --- | --- | --- |
+| `google_books_key` | empty | Optional Google Books API key, if you ever hit Google's daily lookup limit |
+| `publish_sensor` | true | Publish `sensor.library_books` to HA |
 
-- `app.py`: the web app and API
-- `static/`: the page (`index.html`, `app.js`, `style.css`), icons, and `vendor/` (SortableJS for dragging,
-  ZXing for barcode scanning on iPhones)
-- `booktracker.service`, `install.sh`, `update.sh`: running it on the server
+## Development
+
+```bash
+cd library
+pip install -r requirements.txt
+LIBRARY_DATA=./data python -m uvicorn app.main:app --reload --port 8099
+```
+
+Then open <http://localhost:8099>. Every URL in the page is relative (no leading `/`), because
+Home Assistant serves add-on panels under `/api/hassio_ingress/<token>/`.
+
+### Layout
+
+```
+repository.yaml       makes this repo an add-on repository
+library/
+  config.yaml         add-on manifest
+  Dockerfile
+  app/main.py         FastAPI app and API (SQLite in /data/books.db)
+  app/static/         front end: plain HTML/CSS/JS, no build step; vendor/ has SortableJS and ZXing
+```
+
+This repo used to be "Book Tracker / Gabbie's Library", which ran as a service in its own Proxmox
+LXC container. That set-up has been replaced by the add-on.

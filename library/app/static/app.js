@@ -1,4 +1,5 @@
-// Book Tracker front end - plain JavaScript, no build step.
+// L.I.B.R.A.R.Y. front end - plain JavaScript, no build step.
+// It runs behind Home Assistant ingress, so every URL here is relative (no leading slash).
 const view = document.getElementById("view");
 const modal = document.getElementById("modal");
 const modalBody = document.getElementById("modal-body");
@@ -24,7 +25,7 @@ async function api(path, opts = {}) {
     init.body = JSON.stringify(opts.body);
     init.headers["Content-Type"] = "application/json";
   }
-  const r = await fetch("/api" + path, init);
+  const r = await fetch("api" + path, init);
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch {}
@@ -185,6 +186,7 @@ async function route() {
   const name = (location.hash.slice(1).split("?")[0] || "bookcases");
   const fn = VIEWS[name] || VIEWS.bookcases;
   document.querySelectorAll(".tabs a").forEach((a) => a.toggleAttribute("aria-current", a.dataset.tab === name));
+  document.querySelector(".fab")?.toggleAttribute("hidden", name === "add");
   if (name !== current) window.scrollTo(0, 0);
   current = name;
   try { await fn(params()); } catch (e) { fail(e); }
@@ -996,11 +998,30 @@ async function startCamera(video, onCode) {
       return () => { on = false; stream.getTracks().forEach((t) => t.stop()); };
     }
   }
-  await loadScript("/static/vendor/zxing.min.js");       // iPhones and Firefox
+  await loadScript("static/vendor/zxing.min.js");       // iPhones and Firefox
   const hints = new Map([[ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]]]);
   const reader = new ZXing.BrowserMultiFormatReader(hints, 160);
   await reader.decodeFromConstraints({ video: { facingMode: { ideal: "environment" } }, audio: false }, video, (res) => { if (res) onCode(res.getText()); });
   return () => reader.reset();
+}
+// Read a barcode from a still photo: the fallback when live video isn't allowed (e.g. HA opened over http://)
+async function decodePhoto(file) {
+  if (!file) return null;
+  const bmp = await createImageBitmap(file).catch(() => null);
+  if (!bmp) return null;
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const canvas = h("canvas");
+  canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale);
+  canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  if ("BarcodeDetector" in window) {
+    try { const found = await new BarcodeDetector({ formats: ["ean_13"] }).detect(canvas); if (found.length) return found[0].rawValue; } catch {}
+  }
+  try {
+    await loadScript("static/vendor/zxing.min.js");
+    const hints = new Map([[ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]], [ZXing.DecodeHintType.TRY_HARDER, true]]);
+    const res = await new ZXing.BrowserMultiFormatReader(hints).decodeFromImageUrl(canvas.toDataURL("image/jpeg", .92));
+    return res.getText();
+  } catch { return null; }
 }
 function openScanner({ to, target, add, onDone }) {
   const video = h("video", { playsinline: true, muted: true, autoplay: true });
@@ -1046,12 +1067,20 @@ function openScanner({ to, target, add, onDone }) {
     h("div", { class: "scanner" }, video, h("div", { class: "scan-guide", "aria-hidden": "true" })),
     status,
     h("div", { class: "row between" }, h("label", { class: "check" }, keep, "Keep scanning (adds each book straight away)"),
-      h("button", { class: "btn primary", type: "button", onclick: () => { closeModal(); onDone && onDone(); } }, "Done")),
+      h("div", { class: "row" },
+        h("button", { class: "btn", type: "button", onclick: async () => {
+          const file = await pickFile("image/*", "environment");
+          if (!file) return;
+          status.textContent = "Reading the barcode…";
+          const code = await decodePhoto(file);
+          if (code) handle(code); else status.textContent = "Couldn't read a barcode in that photo. Get closer, fill the frame and keep it sharp.";
+        } }, "Photo of a barcode"),
+        h("button", { class: "btn primary", type: "button", onclick: () => { closeModal(); onDone && onDone(); } }, "Done"))),
     log);
   modal.classList.add("wide");
   modal.addEventListener("close", () => modal.classList.remove("wide"), { once: true });
   if (!window.isSecureContext || !navigator.mediaDevices) {
-    status.textContent = "The camera only works when the app is opened over https:// (your books.… address), not the http:// local one. You can still type ISBNs.";
+    status.textContent = "Live scanning needs Home Assistant opened over https://. Use \"Photo of a barcode\" instead, or type the ISBN.";
     return;
   }
   startCamera(video, handle).then((stop) => { scanStop = stop; status.textContent = "Point the camera at a barcode"; })
@@ -1276,7 +1305,7 @@ VIEWS.more = function () {
       hardcoverPanel(),
       h("section", { class: "panel" }, h("h2", {}, "Export and backup"),
         h("p", { class: "muted small" }, "The CSV opens in Excel. The backup has everything, pictures included."),
-        h("div", { class: "row" }, h("a", { class: "btn", href: "/api/export.csv" }, "Download CSV"), h("a", { class: "btn", href: "/api/backup" }, "Download backup")))));
+        h("div", { class: "row" }, h("a", { class: "btn", href: "api/export.csv" }, "Download CSV"), h("a", { class: "btn", href: "api/backup" }, "Download backup")))));
   api("/job").then((j) => { if (j.running) watchJob(jobBox); });
 };
 // A Hardcover key lets the Series page find many more series (newer and smaller ones especially).

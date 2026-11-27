@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Book Tracker: a self-hosted home library. Books, their covers and spines, your bookcases
-shelf by shelf, authors, series and a wishlist.
+L.I.B.R.A.R.Y. (Lovingly Indexed Bookcases, Reads, Authors, Rows & Yarns): a home library as a
+Home Assistant add-on. Books, their covers and spines, your bookcases shelf by shelf, authors,
+series and a wishlist.
 
-Run (inside the venv):  uvicorn app:app --host 0.0.0.0 --port 8000
-Then open http://<container-ip>:8000 from any device on your network.
+In Home Assistant it runs behind ingress, so every URL the page uses is relative.
+Outside HA:  LIBRARY_DATA=./data uvicorn app.main:app --port 8099
 """
 import csv
 import hashlib
@@ -30,7 +31,18 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, ImageStat
 
 HERE = Path(__file__).parent
-HOME = Path(os.environ.get("BOOKTRACKER_HOME", HERE))     # where your books live (never in git)
+# where your books live: /data inside the add-on, so they're part of Home Assistant backups
+HOME = Path(os.environ.get("LIBRARY_DATA") or ("/data" if Path("/data").is_dir() else HERE.parent / "data"))
+HOME.mkdir(parents=True, exist_ok=True)
+
+
+def addon_options():
+    """The add-on's Configuration tab, as Home Assistant writes it to /data/options.json."""
+    try:
+        return json.loads((HOME / "options.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
 DB = HOME / "books.db"
 COVERS = HOME / "covers"
 SPINES = HOME / "spines"
@@ -41,8 +53,8 @@ for d in (COVERS, SPINES):
 OL = os.environ.get("OPENLIBRARY_URL", "https://openlibrary.org")
 OL_COVERS = os.environ.get("OPENLIBRARY_COVERS_URL", "https://covers.openlibrary.org")
 GB = os.environ.get("GOOGLE_BOOKS_URL", "https://www.googleapis.com/books/v1")
-GB_KEY = os.environ.get("GOOGLE_BOOKS_KEY", "")          # optional; raises Google's daily limit
-UA = "BookTracker/1.0 (self-hosted home library; https://github.com/Hnners/booktracker)"
+GB_KEY = addon_options().get("google_books_key") or os.environ.get("GOOGLE_BOOKS_KEY", "")  # optional; raises Google's daily limit
+UA = "LIBRARY/2.0 (Home Assistant add-on, home library; https://github.com/Hnners/booktracker)"
 WIKIDATA = os.environ.get("WIKIDATA_SPARQL_URL", "https://query.wikidata.org/sparql")
 
 # Sizes for drawing spines when a book doesn't say: spine height by format (mm)
@@ -55,7 +67,8 @@ FORMATS = {
 DIGITAL = ("ebook", "audiobook")
 SHELVABLE = ("paperback", "large-paperback", "mass-market", "hardback")
 
-app = FastAPI(title="Gabbie's Library")
+VERSION = "2.0.0"
+app = FastAPI(title="L.I.B.R.A.R.Y.", version=VERSION, docs_url=None, redoc_url=None)
 
 
 # ---------------------------------------------------------------- database
@@ -251,8 +264,8 @@ def book_out(r):
     b["authors"] = json.loads(b["authors"] or "[]")
     b["author_sort"] = author_sort(b["authors"][0]) if b["authors"] else ""
     b["height"], b["thickness"] = dims(r)
-    b["cover_url"] = f"/covers/{b['cover']}" if b["cover"] else None
-    b["spine_url"] = f"/spines/{b['spine_photo']}" if b["spine_photo"] else None
+    b["cover_url"] = f"covers/{b['cover']}" if b["cover"] else None
+    b["spine_url"] = f"spines/{b['spine_photo']}" if b["spine_photo"] else None
     b.pop("cover_urls", None)
     return b
 
@@ -1579,7 +1592,7 @@ def backup(background: BackgroundTasks):
         dst = sqlite3.connect(snap)
         c.backup(dst)
         dst.close()
-    out = tmp / f"booktracker-backup-{datetime.now():%Y-%m-%d}.zip"
+    out = tmp / f"library-backup-{datetime.now():%Y-%m-%d}.zip"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(snap, "books.db")
         for folder in (COVERS, SPINES):
@@ -1610,16 +1623,6 @@ STATIC = HERE / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
-@app.get("/manifest.json")
-def manifest():
-    return FileResponse(STATIC / "manifest.json", media_type="application/manifest+json")
-
-
-@app.get("/sw.js")
-def service_worker():
-    return FileResponse(STATIC / "sw.js", media_type="text/javascript")
-
-
 def version_of(name):
     """A fingerprint of a file's contents: it changes whenever an update changes the file."""
     return hashlib.sha1((STATIC / name).read_bytes()).hexdigest()[:10]
@@ -1627,9 +1630,51 @@ def version_of(name):
 
 @app.get("/")
 def index():
-    """The page, pointing at this version of the script and styles (app.js?v=...), so phones,
-    browsers and Cloudflare never keep running an old copy after an update."""
+    """The page, pointing at this version of the script and styles (app.js?v=...), so phones
+    never keep running an old copy after an add-on update."""
     html = (STATIC / "index.html").read_text()
     for name in ("app.js", "style.css"):
-        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={version_of(name)}\"")
+        html = html.replace(f"static/{name}\"", f"static/{name}?v={version_of(name)}\"")
     return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@app.get("/healthz")
+def healthz():
+    return Response("ok", media_type="text/plain")
+
+
+# ---------------------------------------------------------------- Home Assistant sensor
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HA_TOKEN")
+HA_API = os.environ.get("HA_URL", "http://supervisor/core").rstrip("/") + "/api"
+
+
+def push_sensor():
+    """sensor.library_books: books owned, with wishlist / reading / on-loan counts as attributes."""
+    if not SUPERVISOR_TOKEN or addon_options().get("publish_sensor") is False:
+        return
+    with db() as c:
+        r = c.execute("""SELECT SUM(status='owned') owned, SUM(status='wishlist') wishlist,
+            SUM(status='owned' AND read_status='read') done, SUM(status='owned' AND read_status='reading') reading,
+            SUM(status='owned' AND loaned_at IS NOT NULL AND loaned_at != '') on_loan,
+            (SELECT COUNT(*) FROM bookcases) cases FROM books""").fetchone()
+    attrs = {"friendly_name": "L.I.B.R.A.R.Y. books", "icon": "mdi:bookshelf", "unit_of_measurement": "books",
+             "wishlist": r["wishlist"] or 0, "read": r["done"] or 0, "reading": r["reading"] or 0,
+             "on_loan": r["on_loan"] or 0, "bookcases": r["cases"] or 0}
+    req = urllib.request.Request(f"{HA_API}/states/sensor.library_books", method="POST",
+                                 data=json.dumps({"state": r["owned"] or 0, "attributes": attrs}).encode(),
+                                 headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10).close()
+
+
+def sensor_loop():
+    time.sleep(5)
+    while True:
+        try:
+            push_sensor()
+        except Exception as e:            # HA restarting, etc.: try again next time
+            print(f"sensor update failed: {e}", flush=True)
+        time.sleep(300)
+
+
+if SUPERVISOR_TOKEN:
+    threading.Thread(target=sensor_loop, daemon=True).start()
