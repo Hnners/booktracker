@@ -1,4 +1,4 @@
-# L.I.B.R.A.R.Y. – Lovingly Indexed Books. Read? Allegedly. Really? Yeah.
+# L.I.B.R.A.R.Y. – Lovingly Indexed Books. Read...? ...Allegedly... Really...? Yeah
 
 A Home Assistant add-on for our home library: every book with its cover and spine, the bookcases
 drawn shelf by shelf, authors, series with the gaps you're missing, a wishlist and books on loan.
