@@ -1,5 +1,5 @@
 :root {
-  /* same family as M.A.S.H. and C.R.A.P.: dark, stencil headings, one bold accent. Here: library green + gold foil */
+  /* same family as M.A.S.H. and C.R.A.P.: dark, Barlow Condensed headings, one bold accent. Here: library green + gold foil */
   --bg: #161a17;
   --surface: #20261f;
   --surface-2: #29302a;
@@ -14,8 +14,8 @@
   --gold: #d9b45a;          /* gold foil */
   --ok: #6dbb7f;
   --radius: 8px;
-  --head: 'Big Shoulders Stencil Display', 'Arial Narrow', sans-serif;
-  --display: 'Big Shoulders Stencil Display', 'Arial Narrow', sans-serif;
+  --head: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --book: 'Fraunces', Georgia, serif;          /* type on spines and drawn covers */
   --body: 'Work Sans', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -31,8 +31,8 @@ a { color: inherit; }
 button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 h1, h2, h3 { font-family: var(--display); line-height: 1.15; margin: 0; font-optical-sizing: auto; }
-h1 { font-size: clamp(2.2rem, 1.6rem + 2vw, 3rem); font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-h2 { font-size: 1.55rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+h1 { font-size: clamp(2.2rem, 1.6rem + 2vw, 3rem); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+h2 { font-size: 1.55rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 h3 { font-size: 1.05rem; font-weight: 700; }
 p { margin: .4em 0; }
 .muted { color: var(--muted); }
@@ -46,7 +46,7 @@ p { margin: .4em 0; }
 .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); padding-bottom: 14px; }
 .brand-mark { width: 50px; height: 50px; flex: none; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; border-radius: var(--radius); }
 .brand-text { display: flex; flex-direction: column; min-width: 0; }
-.brand-name { font-family: var(--head); font-size: 42px; font-weight: 800; letter-spacing: .05em; line-height: .95; }
+.brand-name { font-family: var(--head); font-size: 42px; font-weight: 700; letter-spacing: .05em; line-height: .95; }
 .brand-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: .07em; }
 .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; align-self: flex-end; }
 .tabs::-webkit-scrollbar { display: none; }
@@ -228,7 +228,7 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6
 .progress .bar span { display: block; height: 100%; background: var(--ok); border-radius: inherit; }
 .cover.gap { display: grid; place-content: center; text-align: center; gap: 2px; background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(127,110,90,.08) 8px 16px); border: 2px dashed var(--line); box-shadow: none; color: var(--muted); }
 .cover.gap::after { display: none; }
-.cover.gap span { font-family: var(--display); font-size: 1.6rem; font-weight: 800; }
+.cover.gap span { font-family: var(--display); font-size: 1.6rem; font-weight: 700; }
 .tile.missing:hover .cover.gap { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- wishlist */
@@ -417,7 +417,7 @@ details .grid-2 { margin-top: 10px; }
 /* ---------- series books not added yet (titles from Wikidata) */
 .cover.gap.titled { display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; text-align: left; padding: 12% 10%;
   background: color-mix(in srgb, var(--line) 45%, transparent); border: 2px dashed var(--line); opacity: .75; filter: grayscale(1); }
-.cover.gap.titled .gap-no { font-size: 1rem; font-weight: 800; }
+.cover.gap.titled .gap-no { font-size: 1rem; font-weight: 700; }
 .cover.gap.titled .gap-title { font-family: var(--book); font-size: .92rem; font-weight: 700; line-height: 1.15; color: var(--ink);
   overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
 .cover.gap.titled small { font-size: .7rem; }

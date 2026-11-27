@@ -67,7 +67,7 @@ FORMATS = {
 DIGITAL = ("ebook", "audiobook")
 SHELVABLE = ("paperback", "large-paperback", "mass-market", "hardback")
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 app = FastAPI(title="L.I.B.R.A.R.Y.", version=VERSION, docs_url=None, redoc_url=None)
 
 

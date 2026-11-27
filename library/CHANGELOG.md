@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1
+
+- Headings use Barlow Condensed, the same as M.A.S.H.
+
 ## 2.0.0
 
 - Book Tracker is now L.I.B.R.A.R.Y. (Lovingly Indexed Books. Read...? ...Allegedly... Really...? Yeah), a Home Assistant add-on with its own sidebar panel (ingress).
