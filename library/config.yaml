@@ -1,7 +1,7 @@
 name: L.I.B.R.A.R.Y.
 version: "2.0.0"
 slug: library
-description: Lovingly Indexed Bookcases, Rarely Actually Read Yet – your books, bookcases shelf by shelf, series and wishlist.
+description: Lovingly Indexed Books. Read? Allegedly. Really? Yeah. – your books, bookcases shelf by shelf, series and wishlist.
 url: https://github.com/Hnners/booktracker
 arch:
   - amd64

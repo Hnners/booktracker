@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-L.I.B.R.A.R.Y. (Lovingly Indexed Bookcases, Rarely Actually Read Yet): a home library as a
+L.I.B.R.A.R.Y. (Lovingly Indexed Books. Read? Allegedly. Really? Yeah.): a home library as a
 Home Assistant add-on. Books, their covers and spines, your bookcases shelf by shelf, authors,
 series and a wishlist.
 
