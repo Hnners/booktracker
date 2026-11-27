@@ -583,6 +583,11 @@ VIEWS.library = function () {
     const list = mine.filter((b) => tests[show.value](b) && matches(b, q.value.trim())).sort(SORTS[sort.value]);
     grid.replaceChildren(...list.map((b) => bookTile(b, sort.value === "series" && b.series ? seriesText(b) : authorsText(b))));
     count.textContent = list.length === mine.length ? "" : `Showing ${list.length} of ${mine.length}`;
+    // the joke in the name: 積読 (tsundoku) is Japanese for buying books and leaving them to pile up unread
+    if (show.value === "unread" && list.length && !q.value.trim())
+      count.textContent = `積読 · tsundoku: ${plural(list.length, "book")} bought, loved and not read yet (${Math.round(100 * list.length / mine.length)}% of the library)`;
+    if (show.value === "reading" && !list.length && !q.value.trim())
+      count.textContent = "Nothing on the go. The tsundoku pile thanks you for your restraint.";
   };
   q.addEventListener("input", draw); show.addEventListener("change", draw); sort.addEventListener("change", draw);
   setView(
