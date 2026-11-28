@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.2
+
+- Pages use the full width of the window on wide screens.
+
 ## 2.0.1
 
 - Headings use Barlow Condensed, the same as M.A.S.H.
